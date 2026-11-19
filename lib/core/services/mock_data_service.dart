@@ -2,6 +2,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/mock_models.dart';
 import 'local_storage_service.dart';
 import 'auth_service.dart';
+import '../utils/schedule_utils.dart';
+import '../utils/time_utils.dart';
 
 // Local storage provider
 final localStorageProvider = Provider<LocalStorageService>((ref) {
@@ -45,6 +47,16 @@ class AppSettingsNotifier extends StateNotifier<AppSettings> {
     _storage.saveSettings(state);
   }
 
+  void setTextScale(double scale) {
+    state = state.copyWith(textScale: scale.clamp(1.0, 1.5).toDouble());
+    _storage.saveSettings(state);
+  }
+
+  void setCloudBackup(bool enabled) {
+    state = state.copyWith(cloudBackupEnabled: enabled);
+    _storage.saveSettings(state);
+  }
+
   void setOnboardingCompleted(bool completed) {
     state = state.copyWith(onboardingCompleted: completed);
     _storage.saveSettings(state);
@@ -52,15 +64,11 @@ class AppSettingsNotifier extends StateNotifier<AppSettings> {
 
   void updateToggles({
     bool? appNotifications,
-    bool? smsReminders,
     bool? caregiverAlerts,
-    bool? dailySummarySms,
   }) {
     state = state.copyWith(
       appNotificationsEnabled: appNotifications ?? state.appNotificationsEnabled,
-      smsRemindersEnabled: smsReminders ?? state.smsRemindersEnabled,
       caregiverAlertsEnabled: caregiverAlerts ?? state.caregiverAlertsEnabled,
-      dailySummaryEnabled: dailySummarySms ?? state.dailySummaryEnabled,
     );
     _storage.saveSettings(state);
   }
@@ -300,19 +308,51 @@ class MedicinesNotifier extends StateNotifier<List<Medicine>> {
   final LocalStorageService _storage;
   final String? uid;
 
-  MedicinesNotifier(this._storage, List<Medicine> initial, this.uid) : super(initial);
+  MedicinesNotifier(this._storage, List<Medicine> initial, this.uid) : super(_migrate(_storage, initial, uid));
+
+  /// Older versions stored times exactly as the time picker formatted them, e.g. "20:30"
+  /// on 24-hour phones or "8:30 AM", which the alarm scheduler could not always read.
+  /// Rewrite them to the canonical "hh:mm AM" form once, on load.
+  static List<Medicine> _migrate(LocalStorageService storage, List<Medicine> meds, String? uid) {
+    return [
+      for (final m in meds) _normalizedAndPersisted(storage, m, uid),
+    ];
+  }
+
+  static Medicine _normalizedAndPersisted(LocalStorageService storage, Medicine m, String? uid) {
+    final normalized = _normalize(m);
+    if (normalized.times.join('|') != m.times.join('|')) {
+      storage.saveMedicine(normalized, uid);
+    }
+    return normalized;
+  }
+
+  /// Canonicalises reminder times. Unreadable times are kept as typed (so nothing the user
+  /// entered silently disappears); screens validate input before saving.
+  static Medicine _normalize(Medicine m) {
+    final seen = <String>{};
+    final times = <String>[];
+    for (final t in m.times) {
+      final n = normalizeTimeString(t) ?? t.trim();
+      if (n.isNotEmpty && seen.add(n)) times.add(n);
+    }
+    times.sort((a, b) => minutesOfDay(a).compareTo(minutesOfDay(b)));
+    return m.copyWith(times: times);
+  }
 
   void addMedicine(Medicine med) {
-    state = [...state, med];
-    _storage.saveMedicine(med, uid);
+    final normalized = _normalize(med.copyWith(createdAt: med.createdAt ?? DateTime.now()));
+    state = [...state, normalized];
+    _storage.saveMedicine(normalized, uid);
   }
 
   void updateMedicine(Medicine updatedMed) {
+    final normalized = _normalize(updatedMed);
     state = [
       for (final med in state)
-        if (med.id == updatedMed.id) updatedMed else med
+        if (med.id == normalized.id) normalized else med
     ];
-    _storage.saveMedicine(updatedMed, uid);
+    _storage.saveMedicine(normalized, uid);
   }
 
   void updateStatus(String id, String status) {
@@ -366,31 +406,49 @@ class DoseLogsNotifier extends StateNotifier<List<DoseLog>> {
   final LocalStorageService _storage;
   final String? uid;
 
-  DoseLogsNotifier(this._storage, List<DoseLog> initial, this.uid) : super(initial);
+  DoseLogsNotifier(this._storage, List<DoseLog> initial, this.uid) : super(_migrate(_storage, initial, uid));
+
+  /// Canonicalise stored scheduled times so they match the (also normalised) medicine
+  /// times, and fill in the due date ([DoseLog.scheduledDate]) on logs saved before it existed.
+  static List<DoseLog> _migrate(LocalStorageService storage, List<DoseLog> logs, String? uid) {
+    final out = <DoseLog>[];
+    for (final l in logs) {
+      final n = normalizeTimeString(l.scheduledTime) ?? l.scheduledTime;
+      final date = l.effectiveScheduledDate;
+      if (n != l.scheduledTime || (l.scheduledDate == null && date != null)) {
+        final fixed = l.copyWith(scheduledTime: n, scheduledDate: date);
+        storage.saveDoseLog(fixed, uid);
+        out.add(fixed);
+      } else {
+        out.add(l);
+      }
+    }
+    // Newest first, as the UI expects.
+    out.sort((a, b) => (b.actualTime ?? DateTime(0)).compareTo(a.actualTime ?? DateTime(0)));
+    return out;
+  }
 
   bool _isSameDay(DateTime a, DateTime b) {
     return a.day == b.day && a.month == b.month && a.year == b.year;
   }
 
-  void addLog(DoseLog log) {
-    final logDate = log.actualTime ?? DateTime.now();
+  void addLog(DoseLog incoming) {
+    final actual = incoming.actualTime ?? DateTime.now();
+    final log = incoming.copyWith(
+      scheduledTime: normalizeTimeString(incoming.scheduledTime) ?? incoming.scheduledTime,
+      actualTime: actual,
+      scheduledDate: incoming.scheduledDate ?? dateKey(actual),
+    );
+    final logDate = log.actualTime!;
     final existingIndex = state.indexWhere((l) =>
         l.medicineId == log.medicineId &&
-        l.scheduledTime == log.scheduledTime &&
+        sameTimeOfDay(l.scheduledTime, log.scheduledTime) &&
         l.actualTime != null &&
         _isSameDay(l.actualTime!, logDate));
 
     if (existingIndex != -1) {
       final existingLog = state[existingIndex];
-      final updatedLog = DoseLog(
-        id: existingLog.id,
-        medicineId: log.medicineId,
-        medicineName: log.medicineName,
-        scheduledTime: log.scheduledTime,
-        actualTime: log.actualTime,
-        status: log.status,
-        note: log.note,
-      );
+      final updatedLog = log.copyWith(id: existingLog.id);
       final updatedList = List<DoseLog>.from(state);
       updatedList[existingIndex] = updatedLog;
       state = updatedList;
@@ -399,6 +457,58 @@ class DoseLogsNotifier extends StateNotifier<List<DoseLog>> {
       state = [log, ...state];
       _storage.saveDoseLog(log, uid);
     }
+  }
+
+  /// Restores the log list to [previous] for one medicine/slot/day, used by "Undo".
+  void undoLog(DoseLog added, DoseLog? previous) {
+    if (previous == null) {
+      state = state.where((l) => l.id != added.id).toList();
+      _storage.deleteDoseLog(added.id, uid);
+    } else {
+      state = [for (final l in state) if (l.id == previous.id) previous else l];
+      _storage.saveDoseLog(previous, uid);
+    }
+  }
+
+  /// The existing log for the same medicine, slot and day as [log], if any.
+  DoseLog? findSameSlotLog(DoseLog log) {
+    final day = log.actualTime ?? DateTime.now();
+    for (final l in state) {
+      if (l.medicineId == log.medicineId &&
+          sameTimeOfDay(l.scheduledTime, log.scheduledTime) &&
+          l.actualTime != null &&
+          _isSameDay(l.actualTime!, day)) {
+        return l;
+      }
+    }
+    return null;
+  }
+
+  /// Adds [log] and returns the stored log (which may reuse an existing entry's id).
+  DoseLog addLogReturning(DoseLog log) {
+    addLog(log);
+    return findSameSlotLog(log) ?? log;
+  }
+
+  /// Records a "missed" log for every scheduled dose that is more than an hour overdue
+  /// and was never taken, skipped or marked. Without this, ignored alarms left no trace,
+  /// so adherence showed 100% and caregivers never saw missed-dose alerts.
+  /// Returns the number of doses newly marked as missed.
+  int recordMissedDoses(List<Medicine> medicines, {DateTime? now}) {
+    final missed = findMissedDoses(medicines: medicines, logs: state, now: now ?? DateTime.now());
+    for (final m in missed) {
+      addLog(DoseLog(
+        id: 'missed_${m.medicine.id}_${m.scheduledAt.toIso8601String()}',
+        medicineId: m.medicine.id,
+        medicineName: '${m.medicine.name} ${m.medicine.strength}'.trim(),
+        scheduledTime: m.slot,
+        actualTime: m.scheduledAt,
+        status: 'missed',
+        note: 'auto',
+        scheduledDate: dateKey(m.scheduledAt),
+      ));
+    }
+    return missed.length;
   }
 
   void reset() {
@@ -466,19 +576,35 @@ final caregiverAlertsProvider = StateNotifierProvider<CaregiverAlertsNotifier, L
 
       // Sync missed doses to caregiver alerts
       ref.listen<List<DoseLog>>(doseLogProvider, (previous, next) {
-        final prevIds = previous?.map((e) => e.id).toSet() ?? {};
-        final newMissed = next.where((log) => log.status == 'missed' && !prevIds.contains(log.id));
+        if (!ref.read(appSettingsProvider).caregiverAlertsEnabled) return;
+        // A log can change status in place (e.g. snoozed -> missed keeps the same id),
+        // so compare statuses rather than only looking for new ids.
+        final prevMissed = {
+          for (final l in previous ?? const <DoseLog>[])
+            if (l.status == 'missed') l.id
+        };
+        final newMissed = next.where((log) => log.status == 'missed' && !prevMissed.contains(log.id));
+        final now = DateTime.now();
         for (final log in newMissed) {
           final alertId = 'missed_${log.id}';
-          if (!notifier.activeAlerts.any((a) => a.id == alertId)) {
-            notifier.addAlert(CaregiverAlert(
-              id: alertId,
-              title: 'Missed Dose: ${log.medicineName}',
-              message: 'The patient did not mark ${log.medicineName} scheduled at ${log.scheduledTime} as taken.',
-              severity: 'High',
-              time: 'Today, ${log.scheduledTime}',
-            ));
-          }
+          if (notifier.activeAlerts.any((a) => a.id == alertId)) continue;
+          final when = log.actualTime;
+          final dayLabel = when == null || isSameDay(when, now)
+              ? 'Today'
+              : (isSameDay(when, now.subtract(const Duration(days: 1)))
+                  ? 'Yesterday'
+                  : '${when.day}/${when.month}/${when.year}');
+          notifier.addAlert(CaregiverAlert(
+            id: alertId,
+            title: 'Missed Dose: ${log.medicineName}',
+            message: '${log.medicineName} scheduled at ${log.scheduledTime} was not marked as taken within an hour.',
+            severity: 'High',
+            time: '$dayLabel, ${log.scheduledTime}',
+            kind: 'missed_dose',
+            medicineName: log.medicineName,
+            scheduledTime: log.scheduledTime,
+            occurredAt: log.actualTime ?? now,
+          ));
         }
       });
 
@@ -492,6 +618,8 @@ final caregiverAlertsProvider = StateNotifierProvider<CaregiverAlertsNotifier, L
             message: 'The patient has no active medicines listed in their schedule.',
             severity: 'Medium',
             time: 'Just now',
+            kind: 'no_medicines',
+            occurredAt: DateTime.now(),
           ));
         } else if (next.isNotEmpty && hasNoMedAlert) {
           notifier.removeAlert('no_medicines_alert');
@@ -526,15 +654,17 @@ class AdherenceStats {
 
 final adherenceStatsProvider = Provider<AdherenceStats>((ref) {
   final logs = ref.watch(doseLogsProvider);
-  final totalLogs = logs.length;
   final takenCount = logs.where((l) => l.status.toLowerCase() == 'taken').length;
   final missedCount = logs.where((l) => l.status.toLowerCase() == 'missed').length;
   final skippedCount = logs.where((l) => l.status.toLowerCase() == 'skipped').length;
   final lateCount = logs.where((l) => l.status.toLowerCase() == 'late').length;
   final snoozedCount = logs.where((l) => l.status.toLowerCase() == 'snoozed').length;
 
-  final double adherenceRate = totalLogs > 0 ? (takenCount / totalLogs) : 1.0;
-  final int adherencePercent = (adherenceRate * 100).toInt();
+  // Adherence = doses taken (on time or late) / doses whose outcome is known.
+  // Snoozed doses are still open, so they are not counted either way.
+  final totalLogs = takenCount + lateCount + missedCount + skippedCount;
+  final double adherenceRate = totalLogs > 0 ? ((takenCount + lateCount) / totalLogs) : 0.0;
+  final int adherencePercent = (adherenceRate * 100).round();
 
   return AdherenceStats(
     totalLogs: totalLogs,

@@ -8,16 +8,22 @@ import '../../../core/models/mock_models.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/services/tts_service.dart';
+import '../../../core/utils/schedule_utils.dart';
+import '../../../core/utils/time_utils.dart';
 import '../../../shared/widgets/app_primary_button.dart';
+import '../../../core/utils/dose_text.dart';
 
 class ReminderAlertScreen extends ConsumerStatefulWidget {
   final String medicineId;
   final String scheduledTime;
+  /// True for the "test alarm" from Reminder settings: nothing is logged.
+  final bool isTest;
 
   const ReminderAlertScreen({
     super.key,
     required this.medicineId,
     required this.scheduledTime,
+    this.isTest = false,
   });
 
   @override
@@ -32,6 +38,8 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen>
   StreamSubscription<TtsState>? _ttsSubscription;
   bool _isPlayingTts = false;
   bool _hasPlayedAutoVoice = false;
+  /// Guards against double taps (shaky hands) logging a dose twice or racing navigation.
+  bool _busy = false;
 
   @override
   void initState() {
@@ -65,6 +73,16 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen>
     });
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Respect the phone's "remove animations" accessibility setting.
+    if (MediaQuery.of(context).disableAnimations) {
+      _pulseController.stop();
+      _pulseController.value = 0.5;
+    }
+  }
+
   void _triggerAutomaticVoice() {
     if (_hasPlayedAutoVoice || !mounted) return;
     _hasPlayedAutoVoice = true;
@@ -79,16 +97,16 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen>
     }
   }
 
+  /// Medicines due in this time slot today that have not been taken or skipped yet.
   List<Medicine> _resolveTargetMedicines(List<Medicine> allMedicines) {
-    final list = allMedicines.where((m) {
-      if (m.status.toLowerCase() != 'active') return false;
-      return m.times.contains(widget.scheduledTime) || m.id == widget.medicineId;
+    if (widget.isTest) return const [];
+    final now = DateTime.now();
+    final logs = ref.read(doseLogsProvider);
+    return allMedicines.where((m) {
+      if (!m.isScheduledOn(now)) return false;
+      if (!m.times.any((t) => sameTimeOfDay(t, widget.scheduledTime))) return false;
+      return !hasDoseLog(logs, m.id, widget.scheduledTime, now);
     }).toList();
-
-    if (list.isEmpty && widget.medicineId.isNotEmpty) {
-      list.addAll(allMedicines.where((m) => m.id == widget.medicineId));
-    }
-    return list;
   }
 
   @override
@@ -111,22 +129,6 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen>
       default:
         return mealRelation.isEmpty ? 'যে কোনো সময়' : mealRelation;
     }
-  }
-
-  String _formatFormName(MedicineForm form, String lang) {
-    if (lang == 'bn') {
-      switch (form) {
-        case MedicineForm.tablet:
-          return 'ট্যাবলেট';
-        case MedicineForm.capsule:
-          return 'ক্যাপসুল';
-        case MedicineForm.syrup:
-          return 'সিরাপ';
-        case MedicineForm.injection:
-          return 'ইনজেকশন';
-      }
-    }
-    return form.displayName;
   }
 
   @override
@@ -153,25 +155,36 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen>
                       color: AppColors.error.withValues(alpha: 0.15),
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.info_outline_rounded, color: AppColors.error, size: 64.0),
+                    child: Icon(
+                      widget.isTest ? Icons.check_circle_rounded : Icons.info_outline_rounded,
+                      color: widget.isTest ? const Color(0xFF34D399) : const Color(0xFFFCA5A5),
+                      size: 64.0,
+                    ),
                   ),
                   const SizedBox(height: 24.0),
                   Text(
-                    lang == 'bn' ? 'ওষুধের বিবরণ পাওয়া যায়নি' : 'No Scheduled Medicines Found',
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 20.0, color: Colors.white),
+                    widget.isTest
+                        ? (lang == 'bn' ? 'পরীক্ষামূলক অ্যালার্ম কাজ করছে' : 'Your test alarm worked')
+                        : (lang == 'bn' ? 'এখন কোনো ওষুধ বাকি নেই' : 'Nothing left to take right now'),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 22.0, color: Colors.white),
                   ),
                   const SizedBox(height: 10.0),
                   Text(
-                    lang == 'bn'
-                        ? 'এই সময়ের ওষুধগুলো হয়তো তালিকা থেকে সরানো হয়েছে বা ইতিমধ্যে গ্রহণ করা হয়েছে।'
-                        : 'Medicines for this time slot may have been removed or already logged.',
+                    widget.isTest
+                        ? (lang == 'bn'
+                            ? 'এটি শুধু একটি পরীক্ষা ছিল। কোনো ডোজ রেকর্ড করা হয়নি।'
+                            : 'This was only a test. No dose was recorded.')
+                        : (lang == 'bn'
+                            ? 'এই সময়ের ওষুধ আগেই খাওয়া হয়েছে, বাদ দেওয়া হয়েছে, অথবা তালিকা থেকে সরানো হয়েছে।'
+                            : 'The medicines for this time were already taken, skipped, or removed from your list.'),
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 14.0, color: Color(0xFF94A3B8)),
+                    style: const TextStyle(fontSize: 17.0, color: Color(0xFFCBD5E1), height: 1.4),
                   ),
                   const SizedBox(height: 32.0),
                   SizedBox(
-                    width: 180.0,
-                    height: 48.0,
+                    width: double.infinity,
+                    height: 56.0,
                     child: AppPrimaryButton(
                       text: lang == 'bn' ? 'হোমে ফিরে যান' : 'Go to Home',
                       icon: Icons.home_rounded,
@@ -193,39 +206,52 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen>
       );
     }
 
-    Future<void> onTakenAll() async {
-      await TtsService.instance.stop();
-
-      // Cancel time slot notification
-      await NotificationService.instance.cancelForTimeSlot(widget.scheduledTime);
-
-      // Mark only currently-due doses as taken
+    Future<void> logAll(String status) async {
       for (final med in targetMedicines) {
         ref.read(doseLogsProvider.notifier).addLog(
               DoseLog(
                 id: const Uuid().v4(),
                 medicineId: med.id,
                 medicineName: '${med.name} ${med.strength}'.trim(),
-                scheduledTime: widget.scheduledTime,
-                status: 'taken',
+                scheduledTime: normalizeTimeString(widget.scheduledTime) ?? widget.scheduledTime,
+                status: status,
                 actualTime: DateTime.now(),
               ),
             );
       }
+    }
+
+    void leave() {
+      if (!context.mounted) return;
+      if (context.canPop()) {
+        context.pop();
+      } else {
+        context.go('/home');
+      }
+    }
+
+    Future<void> onTakenAll() async {
+      if (_busy) return;
+      setState(() => _busy = true);
+      final count = targetMedicines.length;
+      await TtsService.instance.stop();
+      // Remove the ringing notification; the dose-log listener restores tomorrow's alarm.
+      await NotificationService.instance.dismissTimeSlot(widget.scheduledTime);
+      await logAll('taken');
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Row(
             children: [
-              const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20.0),
-              const SizedBox(width: 8.0),
+              const Icon(Icons.check_circle_rounded, color: Colors.white, size: 24.0),
+              const SizedBox(width: 10.0),
               Expanded(
                 child: Text(
                   lang == 'bn'
-                      ? '${targetMedicines.length}টি ওষুধ খাওয়া সম্পন্ন হয়েছে!'
-                      : 'Marked ${targetMedicines.length} medicines as Taken!',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
+                      ? '$countটি ওষুধ খাওয়া হয়েছে বলে রেকর্ড করা হলো'
+                      : (count == 1 ? 'Recorded: medicine taken' : 'Recorded: $count medicines taken'),
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16.0),
                 ),
               ),
             ],
@@ -234,54 +260,35 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen>
           behavior: SnackBarBehavior.floating,
         ),
       );
-
-      if (context.canPop()) {
-        context.pop();
-      } else {
-        context.go('/home');
-      }
+      leave();
     }
 
     Future<void> onRemindLaterAll() async {
+      if (_busy) return;
+      setState(() => _busy = true);
       await TtsService.instance.stop();
-
-      // Cancel current notification
-      await NotificationService.instance.cancelForTimeSlot(widget.scheduledTime);
-
-      // Schedule 10-minute snooze for this group
+      await NotificationService.instance.dismissTimeSlot(widget.scheduledTime);
+      // The snooze uses its own alarm ID, so it never replaces the daily alarm.
       await NotificationService.instance.scheduleSnoozeForTimeGroup(
         widget.scheduledTime,
         targetMedicines,
         10,
       );
-
-      // Log snooze status
-      for (final med in targetMedicines) {
-        ref.read(doseLogsProvider.notifier).addLog(
-              DoseLog(
-                id: const Uuid().v4(),
-                medicineId: med.id,
-                medicineName: '${med.name} ${med.strength}'.trim(),
-                scheduledTime: widget.scheduledTime,
-                status: 'snoozed',
-                actualTime: DateTime.now(),
-              ),
-            );
-      }
+      await logAll('snoozed');
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Row(
             children: [
-              const Icon(Icons.snooze_rounded, color: Colors.white, size: 20.0),
-              const SizedBox(width: 8.0),
+              const Icon(Icons.snooze_rounded, color: Colors.white, size: 24.0),
+              const SizedBox(width: 10.0),
               Expanded(
                 child: Text(
                   lang == 'bn'
-                      ? '১০ মিনিট পরে আবার মনে করিয়ে দেওয়া হবে'
-                      : 'Reminder snoozed for 10 minutes',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
+                      ? '১০ মিনিট পরে আবার মনে করিয়ে দেওয়া হবে'
+                      : 'We will remind you again in 10 minutes',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16.0),
                 ),
               ),
             ],
@@ -290,12 +297,7 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen>
           behavior: SnackBarBehavior.floating,
         ),
       );
-
-      if (context.canPop()) {
-        context.pop();
-      } else {
-        context.go('/home');
-      }
+      leave();
     }
 
     Future<void> toggleTtsDetailed() async {
@@ -318,160 +320,164 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen>
 
     final int count = targetMedicines.length;
 
+    // Header scrolls with the medicine list, so at large text sizes the action buttons
+    // below always stay on screen.
+    final Widget header = Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(20.0, 24.0, 20.0, 20.0),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF0F766E), Color(0xFF134E4A), Color(0xFF0F172A)],
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF0F766E).withValues(alpha: 0.3),
+            blurRadius: 20.0,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          // Animated Pulsing Medication Alarm Badge
+          AnimatedBuilder(
+            animation: _pulseController,
+            builder: (context, child) {
+              return Transform.scale(
+                scale: _pulseAnimation.value,
+                child: Container(
+                  padding: const EdgeInsets.all(20.0),
+                  decoration: BoxDecoration(
+                    gradient: const RadialGradient(
+                      colors: [Color(0xFF14B8A6), Color(0xFF0D9488)],
+                    ),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF14B8A6).withValues(alpha: 0.6),
+                        blurRadius: _glowAnimation.value,
+                        spreadRadius: 3.0,
+                      ),
+                    ],
+                  ),
+                  child: const Text(
+                    '💊',
+                    style: TextStyle(fontSize: 42.0),
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 16.0),
+
+          // Main Alarm Title
+          Text(
+            lang == 'bn' ? 'ওষুধ খাওয়ার সময়' : 'Time for Medicine',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 26.0,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(height: 6.0),
+
+          // Alarm Subtitle
+          Text(
+            lang == 'bn'
+                ? 'এখন আপনার ওষুধ খাওয়ার\nসময় হয়েছে।'
+                : 'It is time to take your\nscheduled medicines.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Color(0xFF99F6E4),
+              fontSize: 16.0,
+              fontWeight: FontWeight.w500,
+              height: 1.3,
+            ),
+          ),
+          const SizedBox(height: 14.0),
+
+          // Time & Count Badges (Wrap: they stack at large text sizes)
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 10.0,
+            runSpacing: 8.0,
+            children: [
+              // Scheduled Time Chip
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 6.0),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(20.0),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.alarm_rounded, color: Colors.white, size: 18.0),
+                    const SizedBox(width: 6.0),
+                    Flexible(
+                      child: Text(
+                        widget.scheduledTime,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15.0,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Medicines Count Chip (e.g. "৩টি ওষুধ এখন খেতে হবে")
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 6.0),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF14B8A6).withValues(alpha: 0.25),
+                  borderRadius: BorderRadius.circular(20.0),
+                  border: Border.all(color: const Color(0xFF2DD4BF).withValues(alpha: 0.5)),
+                ),
+                child: Text(
+                  lang == 'bn' ? '$countটি ওষুধ এখন খেতে হবে' : '$count medicines to take now',
+                  style: const TextStyle(
+                    color: Color(0xFF5EEAD4),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14.0,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
     return Scaffold(
       backgroundColor: const Color(0xFF0F172A), // Premium dark alarm background
       body: SafeArea(
         child: Column(
           children: [
-            // Top Ambient Alarm Header Section
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(20.0, 24.0, 20.0, 20.0),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF0F766E), Color(0xFF134E4A), Color(0xFF0F172A)],
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF0F766E).withValues(alpha: 0.3),
-                    blurRadius: 20.0,
-                    offset: const Offset(0, 10),
-                  ),
-                ],
-              ),
-              child: Column(
-                children: [
-                  // Animated Pulsing Medication Alarm Badge
-                  AnimatedBuilder(
-                    animation: _pulseController,
-                    builder: (context, child) {
-                      return Transform.scale(
-                        scale: _pulseAnimation.value,
-                        child: Container(
-                          padding: const EdgeInsets.all(20.0),
-                          decoration: BoxDecoration(
-                            gradient: const RadialGradient(
-                              colors: [Color(0xFF14B8A6), Color(0xFF0D9488)],
-                            ),
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: const Color(0xFF14B8A6).withValues(alpha: 0.6),
-                                blurRadius: _glowAnimation.value,
-                                spreadRadius: 3.0,
-                              ),
-                            ],
-                          ),
-                          child: const Text(
-                            '💊',
-                            style: TextStyle(fontSize: 42.0),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 16.0),
-
-                  // Main Alarm Title
-                  Text(
-                    lang == 'bn' ? 'ওষুধ খাওয়ার সময়' : 'Time for Medicine',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 26.0,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                  const SizedBox(height: 6.0),
-
-                  // Alarm Subtitle
-                  Text(
-                    lang == 'bn'
-                        ? 'এখন আপনার ওষুধ খাওয়ার\nসময় হয়েছে।'
-                        : 'It is time to take your\nscheduled medicines.',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Color(0xFF99F6E4),
-                      fontSize: 16.0,
-                      fontWeight: FontWeight.w500,
-                      height: 1.3,
-                    ),
-                  ),
-                  const SizedBox(height: 14.0),
-
-                  // Time & Count Badges
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      // Scheduled Time Chip
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 6.0),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(20.0),
-                          border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.alarm_rounded, color: Colors.white, size: 18.0),
-                            const SizedBox(width: 6.0),
-                            Text(
-                              widget.scheduledTime,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 15.0,
-                                letterSpacing: 0.5,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 10.0),
-
-                      // Medicines Count Chip (e.g. "৩টি ওষুধ এখন খেতে হবে")
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 6.0),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF14B8A6).withValues(alpha: 0.25),
-                          borderRadius: BorderRadius.circular(20.0),
-                          border: Border.all(color: const Color(0xFF2DD4BF).withValues(alpha: 0.5)),
-                        ),
-                        child: Text(
-                          lang == 'bn' ? '$countটি ওষুধ এখন খেতে হবে' : '$count medicines to take now',
-                          style: const TextStyle(
-                            color: Color(0xFF5EEAD4),
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14.0,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-
             // Scrollable List of Due Medicines
             Expanded(
               child: ListView.builder(
-                padding: const EdgeInsets.fromLTRB(18.0, 16.0, 18.0, 12.0),
-                itemCount: targetMedicines.length,
+                padding: const EdgeInsets.only(bottom: 12.0),
+                itemCount: targetMedicines.length + 1,
                 itemBuilder: (context, index) {
-                  final med = targetMedicines[index];
+                  if (index == 0) return header;
+                  final med = targetMedicines[index - 1];
                   final localizedMeal = _localizeMeal(med.mealRelation, lang);
-                  final formLabel = _formatFormName(med.form, lang);
 
                   final String subtitle = [
                     if (med.strength.trim().isNotEmpty) med.strength.trim(),
-                    '${med.dose} $formLabel',
-                  ].join(' • ');
+                    doseLabel(med, lang),
+                  ].where((s) => s.isNotEmpty).join(' • ');
 
                   return Container(
-                    margin: const EdgeInsets.only(bottom: 12.0),
+                    margin: EdgeInsets.fromLTRB(18.0, index == 1 ? 16.0 : 0.0, 18.0, 12.0),
                     padding: const EdgeInsets.all(16.0),
                     decoration: BoxDecoration(
                       color: const Color(0xFF1E293B),
@@ -546,12 +552,14 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen>
                                     children: [
                                       const Text('🍽️', style: TextStyle(fontSize: 13.0)),
                                       const SizedBox(width: 5.0),
-                                      Text(
-                                        localizedMeal,
-                                        style: const TextStyle(
-                                          fontSize: 12.5,
-                                          fontWeight: FontWeight.w600,
-                                          color: Color(0xFFE2E8F0),
+                                      Flexible(
+                                        child: Text(
+                                          localizedMeal,
+                                          style: const TextStyle(
+                                            fontSize: 13.5,
+                                            fontWeight: FontWeight.w600,
+                                            color: Color(0xFFE2E8F0),
+                                          ),
                                         ),
                                       ),
                                     ],
@@ -575,7 +583,7 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen>
                                       child: Text(
                                         '${lang == 'bn' ? 'নির্দেশনা' : 'Instruction'}: ${med.instruction.trim()}',
                                         style: const TextStyle(
-                                          fontSize: 12.5,
+                                          fontSize: 13.5,
                                           fontStyle: FontStyle.italic,
                                           color: Color(0xFF94A3B8),
                                         ),
@@ -618,9 +626,8 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen>
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   // 🔊 Bangla TTS Audio Button [ 🔊 শুনুন ] / [ 🔊 বন্ধ করুন ]
-                  SizedBox(
-                    width: double.infinity,
-                    height: 50.0,
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(minWidth: double.infinity, minHeight: 56.0),
                     child: OutlinedButton.icon(
                       icon: Icon(
                         _isPlayingTts ? Icons.stop_circle_rounded : Icons.volume_up_rounded,
@@ -629,8 +636,8 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen>
                       ),
                       label: Text(
                         _isPlayingTts
-                            ? (lang == 'bn' ? '🔊 বন্ধ করুন' : '🔊 Stop')
-                            : (lang == 'bn' ? '🔊 শুনুন' : '🔊 Listen'),
+                            ? (lang == 'bn' ? 'শোনা বন্ধ করুন' : 'Stop reading')
+                            : (lang == 'bn' ? 'শুনুন' : 'Listen'),
                         style: TextStyle(
                           color: _isPlayingTts ? const Color(0xFFF87171) : const Color(0xFF2DD4BF),
                           fontSize: 16.0,
@@ -655,45 +662,43 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen>
                   const SizedBox(height: 12.0),
 
                   // [ TAKEN ] Button
-                  SizedBox(
-                    width: double.infinity,
-                    height: 54.0,
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(minWidth: double.infinity, minHeight: 72.0),
                     child: ElevatedButton.icon(
-                      icon: const Icon(Icons.check_circle_rounded, color: Colors.white, size: 24.0),
+                      icon: const Icon(Icons.check_circle_rounded, color: Colors.white, size: 32.0),
                       label: Text(
-                        lang == 'bn' ? '✓ খেয়েছি (TAKEN)' : '✓ TAKEN',
+                        lang == 'bn' ? 'খেয়েছি' : 'I took it',
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 17.0,
+                          fontSize: 22.0,
                           fontWeight: FontWeight.w800,
-                          letterSpacing: 0.5,
                         ),
                       ),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF10B981),
+                        backgroundColor: AppColors.success,
                         foregroundColor: Colors.white,
+                        disabledBackgroundColor: AppColors.success.withValues(alpha: 0.5),
                         elevation: 4,
-                        shadowColor: const Color(0xFF10B981).withValues(alpha: 0.5),
+                        shadowColor: AppColors.success.withValues(alpha: 0.5),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16.0),
                         ),
                       ),
-                      onPressed: onTakenAll,
+                      onPressed: _busy ? null : onTakenAll,
                     ),
                   ),
                   const SizedBox(height: 10.0),
 
                   // [ REMIND ME LATER ] Button
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48.0,
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(minWidth: double.infinity, minHeight: 60.0),
                     child: TextButton.icon(
-                      icon: const Icon(Icons.snooze_rounded, color: Color(0xFFFBBF24), size: 20.0),
+                      icon: const Icon(Icons.snooze_rounded, color: Color(0xFFFBBF24), size: 26.0),
                       label: Text(
-                        lang == 'bn' ? '১০ মিনিট পরে মনে করিয়ে দিন (REMIND ME LATER)' : 'REMIND ME LATER (10m)',
+                        lang == 'bn' ? '১০ মিনিট পরে মনে করিয়ে দিন' : 'Remind me in 10 minutes',
                         style: const TextStyle(
                           color: Color(0xFFFBBF24),
-                          fontSize: 14.5,
+                          fontSize: 18.0,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -704,7 +709,7 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen>
                           side: const BorderSide(color: Color(0xFFF59E0B), width: 1.2),
                         ),
                       ),
-                      onPressed: onRemindLaterAll,
+                      onPressed: _busy ? null : onRemindLaterAll,
                     ),
                   ),
                 ],

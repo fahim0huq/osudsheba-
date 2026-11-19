@@ -6,6 +6,7 @@ import '../../../core/constants/app_strings.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../shared/widgets/app_primary_button.dart';
+import '../../../shared/widgets/tap_area.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   final bool isSignUp;
@@ -224,7 +225,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> with SingleTickerProv
                             child: Row(
                               children: [
                                 Expanded(
-                                  child: GestureDetector(
+                                  child: TapArea(
                                     onTap: () {
                                       if (_isSignUp) _toggleAuthMode();
                                     },
@@ -255,7 +256,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> with SingleTickerProv
                                   ),
                                 ),
                                 Expanded(
-                                  child: GestureDetector(
+                                  child: TapArea(
                                     onTap: () {
                                       if (!_isSignUp) _toggleAuthMode();
                                     },
@@ -463,7 +464,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> with SingleTickerProv
                                 padding: const EdgeInsets.symmetric(horizontal: 16.0),
                                 child: Text(
                                   AppStrings.get('or_continue_with', lang),
-                                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 12.0),
+                                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 13.5),
                                 ),
                               ),
                               const Expanded(child: Divider(color: AppColors.border, thickness: 1)),
@@ -472,7 +473,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> with SingleTickerProv
                           const SizedBox(height: 10.0),
 
                           // Google Login Button
-                          GestureDetector(
+                          TapArea(
                             onTap: _isLoading ? null : _loginWithGoogle,
                             child: Container(
                               height: 46,
@@ -506,7 +507,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> with SingleTickerProv
                           const SizedBox(height: 8.0),
 
                           // Phone Login Button
-                          GestureDetector(
+                          TapArea(
                             onTap: _isLoading ? null : () => context.push('/phone-verification'),
                             child: Container(
                               height: 46,

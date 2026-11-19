@@ -1,12 +1,36 @@
 import 'package:hive_flutter/hive_flutter.dart';
 import '../models/mock_models.dart';
 
+/// Told about every medicine / dose-log change the app makes, after it is saved on the
+/// phone (used for the cloud backup). Changes that came *from* the cloud are not reported.
+abstract class StorageChangeListener {
+  void medicineSaved(String uid, Map<String, dynamic> data);
+  void medicineDeleted(String uid, String id);
+  void doseLogSaved(String uid, Map<String, dynamic> data);
+  void doseLogDeleted(String uid, String id);
+}
+
+/// Key stamped on each saved record: when it last changed (ms since epoch). The cloud
+/// backup uses it to decide which copy is newer.
+const String kSyncUpdatedAt = 'syncUpdatedAt';
+
 class LocalStorageService {
   static final LocalStorageService _instance = LocalStorageService._internal();
   factory LocalStorageService() => _instance;
   LocalStorageService._internal();
 
   String? currentUid;
+
+  StorageChangeListener? changeListener;
+
+  void _notify(String? uid, void Function(StorageChangeListener l, String uid) call) {
+    final activeUid = uid ?? currentUid;
+    final listener = changeListener;
+    if (listener != null && activeUid != null) call(listener, activeUid);
+  }
+
+  Map<String, dynamic> _stamped(Map<String, dynamic> json) =>
+      {...json, kSyncUpdatedAt: DateTime.now().millisecondsSinceEpoch};
 
   String _boxName(String baseName, String? uid) {
     final activeUid = uid ?? currentUid;
@@ -54,7 +78,9 @@ class LocalStorageService {
     final boxName = _boxName('medicines', uid);
     if (!Hive.isBoxOpen(boxName)) return;
     final box = Hive.box<Map>(boxName);
-    await box.put(medicine.id, medicine.toJson());
+    final data = _stamped(medicine.toJson());
+    await box.put(medicine.id, data);
+    _notify(uid, (l, u) => l.medicineSaved(u, data));
   }
 
   Future<void> updateMedicine(Medicine medicine, [String? uid]) async {
@@ -66,6 +92,7 @@ class LocalStorageService {
     if (!Hive.isBoxOpen(boxName)) return;
     final box = Hive.box<Map>(boxName);
     await box.delete(id);
+    _notify(uid, (l, u) => l.medicineDeleted(u, id));
   }
 
   // Dose Logs
@@ -82,7 +109,42 @@ class LocalStorageService {
     final boxName = _boxName('dose_logs', uid);
     if (!Hive.isBoxOpen(boxName)) return;
     final box = Hive.box<Map>(boxName);
-    await box.put(log.id, log.toJson());
+    final data = _stamped(log.toJson());
+    await box.put(log.id, data);
+    _notify(uid, (l, u) => l.doseLogSaved(u, data));
+  }
+
+  Future<void> deleteDoseLog(String id, [String? uid]) async {
+    final boxName = _boxName('dose_logs', uid);
+    if (!Hive.isBoxOpen(boxName)) return;
+    await Hive.box<Map>(boxName).delete(id);
+    _notify(uid, (l, u) => l.doseLogDeleted(u, id));
+  }
+
+  // Raw records for the cloud backup (include the [kSyncUpdatedAt] stamp).
+
+  /// 'medicines' or 'dose_logs' records for [uid], by id.
+  Map<String, Map<String, dynamic>> rawRecords(String collection, String uid) {
+    final boxName = _boxName(collection, uid);
+    if (!Hive.isBoxOpen(boxName)) return {};
+    final box = Hive.box<Map>(boxName);
+    return {
+      for (final key in box.keys) key.toString(): Map<String, dynamic>.from(box.get(key)!),
+    };
+  }
+
+  /// Writes a record that came from the cloud. Not reported to [changeListener].
+  Future<void> putRecordFromCloud(String collection, String uid, String id, Map<String, dynamic> data) async {
+    final boxName = _boxName(collection, uid);
+    if (!Hive.isBoxOpen(boxName)) return;
+    await Hive.box<Map>(boxName).put(id, data);
+  }
+
+  /// Removes a record deleted in the cloud. Not reported to [changeListener].
+  Future<void> deleteRecordFromCloud(String collection, String uid, String id) async {
+    final boxName = _boxName(collection, uid);
+    if (!Hive.isBoxOpen(boxName)) return;
+    await Hive.box<Map>(boxName).delete(id);
   }
 
   // Caregiver Alerts

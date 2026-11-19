@@ -36,14 +36,28 @@ class _FadeSlideInState extends State<FadeSlideIn> with SingleTickerProviderStat
       CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic),
     );
 
-    if (widget.delay == Duration.zero) {
+    // Staggered delays are capped: long cascades (up to ~1s before) left primary
+    // buttons invisible and untappable while older users were already reaching for them.
+    final delay = widget.delay > _maxDelay ? _maxDelay : widget.delay;
+    if (delay == Duration.zero) {
       _controller.forward();
     } else {
-      Future.delayed(widget.delay, () {
+      Future.delayed(delay, () {
         if (mounted) {
           _controller.forward();
         }
       });
+    }
+  }
+
+  static const Duration _maxDelay = Duration(milliseconds: 200);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Respect the phone's "remove animations" accessibility setting.
+    if (MediaQuery.of(context).disableAnimations) {
+      _controller.value = 1.0;
     }
   }
 

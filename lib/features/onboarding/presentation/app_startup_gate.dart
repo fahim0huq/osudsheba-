@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/constants/app_colors.dart';
+import '../../../core/constants/app_features.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../core/models/auth_user.dart';
-import '../../../core/models/mock_models.dart';
 import '../../../core/providers/subscription_provider.dart';
 
 
@@ -34,12 +34,19 @@ class _AppStartupGateState extends ConsumerState<AppStartupGate> {
     }
     _hasNavigated = true;
 
-    final settings = ref.read(appSettingsProvider);
+    var settings = ref.read(appSettingsProvider);
+
+    // Users who chose "Caregiver" before that role was switched off become Patients.
+    if (effectiveRole(settings.userRole) != settings.userRole) {
+      ref.read(appSettingsProvider.notifier).setRole(effectiveRole(settings.userRole));
+      settings = ref.read(appSettingsProvider);
+    }
 
     // 1. Unauthenticated Routing Check
     if (authUser == null) {
       if (!settings.onboardingCompleted) {
-        context.go('/onboarding');
+        // Language first, so every following screen is in the user's language.
+        context.go('/language-selection');
         return;
       }
       if (settings.userRole == 'None') {
@@ -80,6 +87,10 @@ class _AppStartupGateState extends ConsumerState<AppStartupGate> {
     }
     if (!profile.isLoggedIn) {
       profile = profile.copyWith(isLoggedIn: true);
+      needsUpdate = true;
+    }
+    if (effectiveRole(profile.role) != profile.role) {
+      profile = profile.copyWith(role: effectiveRole(profile.role));
       needsUpdate = true;
     }
 
@@ -156,10 +167,7 @@ class _AppStartupGateState extends ConsumerState<AppStartupGate> {
 
   @override
   Widget build(BuildContext context) {
-    ref.listen<List<Medicine>>(medicinesProvider, (previous, next) {
-      NotificationService.instance.rescheduleAll(next);
-    });
-
+    // Alarm rescheduling is handled centrally in OsudShebaApp (app.dart).
     final authState = ref.watch(authStateProvider);
 
     return authState.when(

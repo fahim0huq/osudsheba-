@@ -5,15 +5,16 @@ import 'package:uuid/uuid.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/models/mock_models.dart';
 import '../../../core/services/mock_data_service.dart';
-import '../../../shared/widgets/app_primary_button.dart';
-import '../../../shared/widgets/fade_slide_in.dart';
+import '../../../core/providers/clock_provider.dart';
+import '../../../core/services/notification_service.dart';
+import '../../../core/utils/schedule_utils.dart';
+import '../../../core/utils/time_utils.dart';
+import 'widgets/medicine_detail_parts.dart';
 
 class MedicineDetailScreen extends ConsumerStatefulWidget {
   final Medicine? medicine;
 
-  const MedicineDetailScreen({super.key,
-    this.medicine,
-  });
+  const MedicineDetailScreen({super.key, this.medicine});
 
   @override
   ConsumerState<MedicineDetailScreen> createState() => _MedicineDetailScreenState();
@@ -22,20 +23,17 @@ class MedicineDetailScreen extends ConsumerStatefulWidget {
 class _MedicineDetailScreenState extends ConsumerState<MedicineDetailScreen> {
   String? _selectedTime;
 
-  bool _isToday(DateTime? dt) {
-    if (dt == null) return false;
-    final now = DateTime.now();
-    return dt.day == now.day && dt.month == now.month && dt.year == now.year;
-  }
-
   @override
   Widget build(BuildContext context) {
     final settings = ref.watch(appSettingsProvider);
     final lang = settings.language;
 
-    // Use passed medicine, selected medicine, or fallback to the first one in the provider list
+    // Always show the latest saved version of the chosen medicine (the route argument is a
+    // snapshot and went stale after editing). Never fall back to a different medicine.
     final medList = ref.watch(medicinesProvider);
-    final currentMed = widget.medicine ?? ref.watch(selectedMedicineProvider) ?? (medList.isNotEmpty ? medList.first : null);
+    final requested = widget.medicine ?? ref.watch(selectedMedicineProvider);
+    final matches = requested == null ? const <Medicine>[] : medList.where((m) => m.id == requested.id).toList();
+    final Medicine? currentMed = matches.isEmpty ? null : matches.first;
 
     if (currentMed == null) {
       final errorTitle = lang == 'bn' ? 'ওষুধ পাওয়া যায়নি' : 'Medicine Not Found';
@@ -56,10 +54,7 @@ class _MedicineDetailScreenState extends ConsumerState<MedicineDetailScreen> {
             children: [
               Container(
                 padding: const EdgeInsets.all(20.0),
-                decoration: BoxDecoration(
-                  color: AppColors.error.withValues(alpha: 0.08),
-                  shape: BoxShape.circle,
-                ),
+                decoration: BoxDecoration(color: AppColors.error.withValues(alpha: 0.08), shape: BoxShape.circle),
                 child: const Icon(Icons.error_outline_rounded, size: 48, color: AppColors.error),
               ),
               const SizedBox(height: 16.0),
@@ -95,76 +90,80 @@ class _MedicineDetailScreenState extends ConsumerState<MedicineDetailScreen> {
     }
 
     final logs = ref.watch(doseLogsProvider);
-    final now = DateTime.now();
-    final todayMedLogs = logs.where((l) =>
-        l.medicineId == currentMed.id &&
-        l.actualTime != null &&
-        l.actualTime!.day == now.day &&
-        l.actualTime!.month == now.month &&
-        l.actualTime!.year == now.year).toList();
+    final now = ref.watch(minuteClockProvider).valueOrNull ?? DateTime.now();
+    final bn = lang == 'bn';
 
-    // Find next pending time for today to default to
+    // Default to the first dose today that has not been taken or skipped yet.
     String? defaultTime;
-    if (currentMed.times.isNotEmpty) {
-      for (final time in currentMed.times) {
-        final isLogged = logs.any((l) =>
-            l.medicineId == currentMed.id &&
-            l.scheduledTime == time &&
-            l.actualTime != null &&
-            _isToday(l.actualTime) &&
-            (l.status == 'taken' || l.status == 'skipped' || l.status == 'snoozed'));
-        if (!isLogged) {
-          defaultTime = time;
-          break;
-        }
+    for (final time in currentMed.times) {
+      if (!hasDoseLog(logs, currentMed.id, time, now)) {
+        defaultTime = time;
+        break;
       }
-      defaultTime ??= currentMed.times.first;
     }
-    final activeTime = _selectedTime ?? defaultTime;
+    defaultTime ??= currentMed.times.isEmpty ? null : currentMed.times.first;
+    final activeTime = currentMed.times.contains(_selectedTime) ? _selectedTime : defaultTime;
 
-    String displayStatus = 'Pending';
-    if (todayMedLogs.any((l) => l.status == 'taken')) {
-      displayStatus = 'Taken';
-    } else if (todayMedLogs.any((l) => l.status == 'skipped')) {
-      displayStatus = 'Skipped';
-    } else if (todayMedLogs.any((l) => l.status == 'snoozed')) {
-      displayStatus = 'Snoozed';
-    } else if (todayMedLogs.any((l) => l.status == 'missed')) {
-      displayStatus = 'Missed';
-    } else {
-      displayStatus = currentMed.status == 'active' ? 'Pending' : currentMed.status;
+    // This medicine over the last 7 days: taken (on time or late) out of all recorded outcomes.
+    final weekStart = dateOnly(now).subtract(const Duration(days: 6));
+    final weekLogs = logs.where(
+      (l) => l.medicineId == currentMed.id && l.actualTime != null && !l.actualTime!.isBefore(weekStart),
+    );
+    final weekTaken = weekLogs.where((l) => l.status == 'taken' || l.status == 'late').length;
+    final weekRecorded = weekTaken + weekLogs.where((l) => l.status == 'skipped' || l.status == 'missed').length;
+
+    // Today's record for the selected time, if any. Once it is taken, the buttons are
+    // replaced by a "Taken at ..." banner so the same dose is not recorded twice.
+    DoseLog? slotLog;
+    for (final l in logs) {
+      if (activeTime != null &&
+          l.medicineId == currentMed.id &&
+          sameTimeOfDay(l.scheduledTime, activeTime) &&
+          l.actualTime != null &&
+          isSameDay(l.actualTime!, now)) {
+        slotLog = l;
+        break;
+      }
+    }
+    final takenLog = (slotLog != null && (slotLog.status == 'taken' || slotLog.status == 'late')) ? slotLog : null;
+    final notifier = ref.read(doseLogsProvider.notifier);
+
+    void record(String status, String message, Color color) {
+      final slot = activeTime;
+      if (slot == null) return;
+      final log = DoseLog(
+        id: const Uuid().v4(),
+        medicineId: currentMed.id,
+        medicineName: '${currentMed.name} ${currentMed.strength}'.trim(),
+        scheduledTime: slot,
+        status: status,
+        actualTime: DateTime.now(),
+      );
+      final previous = notifier.findSameSlotLog(log);
+      final stored = notifier.addLogReturning(log);
+      // "Snooze" used to only write a log; it now really reminds again in 10 minutes.
+      if (status == 'snoozed') NotificationService.instance.scheduleSnooze(currentMed, slot, 10);
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: color,
+            action: status == 'snoozed'
+                ? null
+                : SnackBarAction(
+                    label: bn ? 'ফিরিয়ে নিন' : 'UNDO',
+                    textColor: Colors.white,
+                    onPressed: () => notifier.undoLog(stored, previous),
+                  ),
+          ),
+        );
     }
 
-    final title = lang == 'bn' ? 'ওষুধের বিস্তারিত' : 'Medicine Details';
-
-    // Status Styling
-    Color statusBgColor;
-    Color statusTextColor;
-    switch (displayStatus) {
-      case 'Taken':
-        statusBgColor = const Color(0xFFECFDF5);
-        statusTextColor = const Color(0xFF059669);
-        break;
-      case 'Missed':
-        statusBgColor = const Color(0xFFFEF2F2);
-        statusTextColor = const Color(0xFFDC2626);
-        break;
-      case 'Snoozed':
-        statusBgColor = const Color(0xFFFFFBEB);
-        statusTextColor = const Color(0xFFD97706);
-        break;
-      case 'Skipped':
-        statusBgColor = Colors.grey.shade100;
-        statusTextColor = Colors.grey.shade600;
-        break;
-      default:
-        statusBgColor = const Color(0xFFEFF6FF);
-        statusTextColor = Colors.blue.shade700;
-    }
-
+    const buttonText = TextStyle(fontSize: 15, fontWeight: FontWeight.bold);
     return Scaffold(
       appBar: AppBar(
-        title: Text(title),
+        title: Text(bn ? 'ওষুধের বিস্তারিত' : 'Medicine Details'),
         backgroundColor: Colors.transparent,
         foregroundColor: AppColors.textPrimary,
         elevation: 0,
@@ -172,6 +171,7 @@ class _MedicineDetailScreenState extends ConsumerState<MedicineDetailScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.edit_rounded, color: AppColors.textSecondary),
+            tooltip: bn ? 'সম্পাদনা' : 'Edit',
             onPressed: () {
               ref.read(selectedMedicineProvider.notifier).state = currentMed;
               context.push('/edit-medicine', extra: currentMed);
@@ -179,377 +179,127 @@ class _MedicineDetailScreenState extends ConsumerState<MedicineDetailScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.delete_outline_rounded, color: AppColors.error),
-            onPressed: () {
-              _showDeleteConfirmation(context, ref, currentMed, lang);
-            },
+            tooltip: bn ? 'মুছুন' : 'Delete',
+            onPressed: () => _showDeleteConfirmation(context, ref, currentMed, lang),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 4),
         ],
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Header Card
-            FadeSlideIn(
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 28.0, horizontal: 20.0),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(24.0),
-                  border: Border.all(color: AppColors.border, width: 1.0),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.015),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    )
-                  ],
-                ),
-                child: Column(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(16.0),
-                      decoration: BoxDecoration(
-                        color: AppColors.primaryLight,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(currentMed.form.icon, size: 48, color: AppColors.primary),
-                    ),
-                    const SizedBox(height: 16.0),
-                    Text(
-                      currentMed.name,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 24.0,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 4.0),
-                    Text(
-                      currentMed.strength,
-                      style: const TextStyle(
-                        color: AppColors.primaryDark,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16.0,
-                      ),
-                    ),
-                    const SizedBox(height: 14.0),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 6.0),
-                      decoration: BoxDecoration(
-                        color: statusBgColor,
-                        borderRadius: BorderRadius.circular(12.0),
-                      ),
-                      child: Text(
-                        displayStatus.toUpperCase(),
+            MedicineDetailHeader(medicine: currentMed, status: todayStatusFor(currentMed, logs, now), bn: bn),
+            const SizedBox(height: 8),
+            MedicineDetailFacts(medicine: currentMed, bn: bn),
+            MedicineWeekSummary(taken: weekTaken, recorded: weekRecorded, bn: bn),
+            const SizedBox(height: 14),
+            if (currentMed.times.length > 1) ...[
+              Text(
+                bn ? 'কোন সময়ের ডোজ?' : 'Which dose?',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14.5, color: AppColors.textSecondary),
+              ),
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  for (final time in currentMed.times)
+                    ChoiceChip(
+                      label: Text(
+                        time,
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
-                          color: statusTextColor,
-                          fontSize: 12.0,
+                          color: activeTime == time ? Colors.white : AppColors.textPrimary,
                         ),
                       ),
+                      selected: activeTime == time,
+                      selectedColor: AppColors.primary,
+                      backgroundColor: Colors.grey.shade100,
+                      checkmarkColor: Colors.white,
+                      onSelected: (selected) {
+                        if (selected) setState(() => _selectedTime = time);
+                      },
                     ),
-                  ],
-                ),
+                ],
               ),
-            ),
-            const SizedBox(height: 24.0),
-
-            // Detail sections
-            FadeSlideIn(
-              delay: const Duration(milliseconds: 150),
-              child: Container(
-                padding: const EdgeInsets.all(20.0),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(22.0),
-                  border: Border.all(color: AppColors.border),
-                ),
-                child: Column(
-                  children: [
-                    _buildDetailRow(
-                      context,
-                      icon: Icons.tag_rounded,
-                      label: lang == 'bn' ? 'ওষুধের মাত্রা' : 'Dose Amount',
-                      value: currentMed.dose,
-                    ),
-                    const Divider(height: 24, color: AppColors.border),
-                    _buildDetailRow(
-                      context,
-                      icon: Icons.restaurant_rounded,
-                      label: lang == 'bn' ? 'খাবারের সাথে সম্পর্ক' : 'Meal Relation',
-                      value: currentMed.mealRelation,
-                    ),
-                    const Divider(height: 24, color: AppColors.border),
-                    _buildDetailRow(
-                      context,
-                      icon: Icons.alarm_rounded,
-                      label: lang == 'bn' ? 'রিমাইন্ডারের সময়সমূহ' : 'Reminder Times',
-                      value: currentMed.times.join(', '),
-                    ),
-                    const Divider(height: 24, color: AppColors.border),
-                    _buildDetailRow(
-                      context,
-                      icon: Icons.notes_rounded,
-                      label: lang == 'bn' ? 'নির্দেশনা' : 'Instructions',
-                      value: currentMed.instruction.isNotEmpty
-                          ? currentMed.instruction
-                          : (lang == 'bn' ? 'কোন নির্দেশনা নেই' : 'No specific instructions provided.'),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 20.0),
-
-            // Adherence Tracker card
-            FadeSlideIn(
-              delay: const Duration(milliseconds: 250),
-              child: Container(
-                padding: const EdgeInsets.all(18.0),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFECFDF5),
-                  borderRadius: BorderRadius.circular(20.0),
-                  border: Border.all(color: const Color(0xFFA7F3D0), width: 1.0),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.check_circle_rounded, color: Color(0xFF059669), size: 24.0),
-                    const SizedBox(width: 12.0),
-                    Expanded(
-                      child: Text(
-                        lang == 'bn'
-                            ? 'গত সপ্তাহে শতভাগ মেনে চলা হয়েছে!'
-                            : '100% adherence rate this week!',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF065F46),
-                          fontSize: 14.5,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 36.0),
-
-            if (currentMed.times.length > 1) ...[
-              FadeSlideIn(
-                delay: const Duration(milliseconds: 300),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        lang == 'bn' ? 'ওষুধের সময় নির্বাচন করুন' : 'Select Scheduled Time',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14.5,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                      const SizedBox(height: 10.0),
-                      Wrap(
-                        spacing: 8.0,
-                        runSpacing: 8.0,
-                        children: currentMed.times.map((time) {
-                          final isSelected = activeTime == time;
-                          return ChoiceChip(
-                            label: Text(
-                              time,
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: isSelected ? Colors.white : AppColors.textPrimary,
-                              ),
-                            ),
-                            selected: isSelected,
-                            selectedColor: AppColors.primary,
-                            backgroundColor: Colors.grey.shade100,
-                            checkmarkColor: Colors.white,
-                            onSelected: (selected) {
-                              if (selected) {
-                                setState(() {
-                                  _selectedTime = time;
-                                });
-                              }
-                            },
-                          );
-                        }).toList(),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20.0),
+              const SizedBox(height: 10),
             ],
-
-            // Quick Dose Actions
-            FadeSlideIn(
-              delay: const Duration(milliseconds: 350),
-              child: Row(
+            if (takenLog != null)
+              TakenDoseBanner(
+                log: takenLog,
+                bn: bn,
+                onUndo: () {
+                  notifier.undoLog(takenLog, null);
+                  ScaffoldMessenger.of(context)
+                    ..hideCurrentSnackBar()
+                    ..showSnackBar(
+                      SnackBar(
+                        content: Text(bn ? 'খাওয়ার রেকর্ড মুছে দেওয়া হয়েছে' : 'Taken record removed'),
+                        backgroundColor: AppColors.textSecondary,
+                      ),
+                    );
+                },
+              )
+            else ...[
+              Row(
                 children: [
                   Expanded(
-                    child: GestureDetector(
-                      onTap: () {
-                        ref.read(doseLogsProvider.notifier).addLog(
-                              DoseLog(
-                                id: const Uuid().v4(),
-                                medicineId: currentMed.id,
-                                medicineName: '${currentMed.name} ${currentMed.strength}',
-                                scheduledTime: activeTime ?? currentMed.times.first,
-                                status: 'skipped',
-                                actualTime: DateTime.now(),
-                              ),
-                            );
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(lang == 'bn' ? 'ওষুধ খাওয়া বাদ দেয়া হয়েছে' : 'Dose skipped!'),
-                            backgroundColor: AppColors.textSecondary,
-                          ),
-                        );
-                      },
-                      child: Container(
-                        height: 50,
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade100,
-                          borderRadius: BorderRadius.circular(14.0),
-                          border: Border.all(color: Colors.grey.shade300, width: 1.0),
-                        ),
-                        alignment: Alignment.center,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.block_rounded, size: 18, color: AppColors.textSecondary),
-                            const SizedBox(width: 6),
-                            Text(
-                              lang == 'bn' ? 'বাদ দিন' : 'Skip',
-                              style: const TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.bold, fontSize: 14),
-                            ),
-                          ],
-                        ),
+                    child: OutlinedButton.icon(
+                      onPressed: () =>
+                          record('skipped', bn ? 'ডোজ বাদ দেওয়া হয়েছে' : 'Dose skipped', AppColors.textSecondary),
+                      icon: const Icon(Icons.block_rounded, size: 20),
+                      label: Text(bn ? 'বাদ দিন' : 'Skip'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.textSecondary,
+                        minimumSize: const Size(0, 48),
+                        textStyle: buttonText,
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12.0),
+                  const SizedBox(width: 10),
                   Expanded(
-                    child: GestureDetector(
-                      onTap: () {
-                        ref.read(doseLogsProvider.notifier).addLog(
-                              DoseLog(
-                                id: const Uuid().v4(),
-                                medicineId: currentMed.id,
-                                medicineName: '${currentMed.name} ${currentMed.strength}',
-                                scheduledTime: activeTime ?? currentMed.times.first,
-                                status: 'snoozed',
-                                actualTime: DateTime.now(),
-                              ),
-                            );
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(lang == 'bn' ? 'অ্যালার্ম থামানো হয়েছে' : 'Snoozed for 10 mins!'),
-                            backgroundColor: AppColors.warning,
-                          ),
-                        );
-                      },
-                      child: Container(
-                        height: 50,
-                        decoration: BoxDecoration(
-                          color: Colors.orange.shade50,
-                          borderRadius: BorderRadius.circular(14.0),
-                          border: Border.all(color: Colors.orange.shade200, width: 1.0),
-                        ),
-                        alignment: Alignment.center,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.snooze_rounded, size: 18, color: Colors.orange),
-                            const SizedBox(width: 6),
-                            Text(
-                              lang == 'bn' ? 'দেরি হবে' : 'Snooze',
-                              style: TextStyle(color: Colors.orange.shade800, fontWeight: FontWeight.bold, fontSize: 14),
-                            ),
-                          ],
-                        ),
+                    child: OutlinedButton.icon(
+                      onPressed: () => record(
+                        'snoozed',
+                        bn ? '১০ মিনিট পরে আবার মনে করিয়ে দেবে' : 'Will remind you again in 10 minutes',
+                        AppColors.warning,
+                      ),
+                      icon: const Icon(Icons.snooze_rounded, size: 20),
+                      label: Text(bn ? '১০ মিনিট পরে' : 'Snooze 10 min'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.orange.shade800,
+                        side: BorderSide(color: Colors.orange.shade200),
+                        minimumSize: const Size(0, 48),
+                        textStyle: buttonText,
                       ),
                     ),
                   ),
                 ],
               ),
-            ),
-            const SizedBox(height: 12.0),
-            FadeSlideIn(
-              delay: const Duration(milliseconds: 450),
-              child: AppPrimaryButton(
-                text: lang == 'bn' ? 'খেয়েছি' : 'Mark as Taken',
-                icon: Icons.check_circle_outline_rounded,
-                onPressed: () {
-                  ref.read(doseLogsProvider.notifier).addLog(
-                        DoseLog(
-                          id: const Uuid().v4(),
-                          medicineId: currentMed.id,
-                          medicineName: '${currentMed.name} ${currentMed.strength}',
-                          scheduledTime: activeTime ?? currentMed.times.first,
-                          status: 'taken',
-                          actualTime: DateTime.now(),
-                        ),
-                      );
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(lang == 'bn' ? 'ওষুধ খাওয়া সফল হয়েছে' : 'Dose marked as Taken!'),
-                      backgroundColor: AppColors.success,
-                    ),
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 20.0),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDetailRow(BuildContext context, {
-    required IconData icon,
-    required String label,
-    required String value,
-  }) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, color: AppColors.primary, size: 22.0),
-        const SizedBox(width: 14.0),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.textSecondary,
-                  fontSize: 13.0,
+              const SizedBox(height: 8),
+              ElevatedButton.icon(
+                onPressed: () =>
+                    record('taken', bn ? 'খাওয়া হয়েছে বলে রেকর্ড করা হলো' : 'Recorded as taken', AppColors.success),
+                icon: const Icon(Icons.check_circle_outline_rounded, size: 22),
+                label: Text(
+                  activeTime == null
+                      ? (bn ? 'খেয়েছি' : 'Mark as taken')
+                      : (bn ? '$activeTime এর ডোজ খেয়েছি' : 'Mark $activeTime as taken'),
+                  textAlign: TextAlign.center,
                 ),
-              ),
-              const SizedBox(height: 2.0),
-              Text(
-                value,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.textPrimary,
-                  fontSize: 14.5,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(0, 52),
+                  textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
               ),
             ],
-          ),
+          ],
         ),
-      ],
+      ),
     );
   }
 
@@ -559,14 +309,13 @@ class _MedicineDetailScreenState extends ConsumerState<MedicineDetailScreen> {
       builder: (BuildContext context) {
         return AlertDialog(
           title: Text(lang == 'bn' ? 'ওষুধ মুছুন' : 'Delete Medicine'),
-          content: Text(lang == 'bn'
-              ? 'আপনি কি নিশ্চিত যে আপনি "${medicine.name}" ওষুধটি তালিকা থেকে মুছে ফেলতে চান?'
-              : 'Are you sure you want to delete "${medicine.name}"? This cannot be undone.'),
+          content: Text(
+            lang == 'bn'
+                ? 'আপনি কি নিশ্চিত যে আপনি "${medicine.name}" ওষুধটি তালিকা থেকে মুছে ফেলতে চান?'
+                : 'Are you sure you want to delete "${medicine.name}"? This cannot be undone.',
+          ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text(lang == 'bn' ? 'বাতিল' : 'Cancel'),
-            ),
+            TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(lang == 'bn' ? 'বাতিল' : 'Cancel')),
             ElevatedButton(
               onPressed: () {
                 Navigator.of(context).pop(); // dismiss dialog
@@ -579,10 +328,7 @@ class _MedicineDetailScreenState extends ConsumerState<MedicineDetailScreen> {
                 );
                 context.go('/home'); // go back to dashboard
               },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.error,
-                foregroundColor: Colors.white,
-              ),
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.error, foregroundColor: Colors.white),
               child: Text(lang == 'bn' ? 'মুছে ফেলুন' : 'Delete'),
             ),
           ],

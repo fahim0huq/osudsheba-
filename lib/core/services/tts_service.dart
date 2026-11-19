@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:developer' as dev;
+import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import '../models/mock_models.dart';
 import 'medication_voice_service.dart';
@@ -99,51 +100,54 @@ class TtsService {
     return false;
   }
 
-  /// Configures the best available Bangla locale ('bn-BD' -> 'bn-IN' -> 'bn')
-  /// Returns false if no Bangla voice is supported. Never silently falls back to English.
-  Future<bool> _configureBanglaLanguage() async {
-    try {
-      // 1. Try Bangladesh Bangla
-      final isBd = await _tts.isLanguageAvailable("bn-BD");
-      if (isBd == true || isBd == 1) {
-        await _tts.setLanguage("bn-BD");
-        dev.log('TtsService: Selected voice locale bn-BD');
+  static bool _ok(dynamic result) => result == 1 || result == true;
+
+  /// Tries Bangla locales on the current speech engine: 'bn-BD' -> 'bn-IN' -> 'bn' -> any 'bn*'.
+  Future<bool> _setBanglaOnCurrentEngine() async {
+    for (final locale in const ['bn-BD', 'bn-IN', 'bn']) {
+      if (_ok(await _tts.isLanguageAvailable(locale)) && _ok(await _tts.setLanguage(locale))) {
+        dev.log('TtsService: Selected voice locale $locale');
         return true;
       }
-
-      // 2. Try India Bangla
-      final isBnIn = await _tts.isLanguageAvailable("bn-IN");
-      if (isBnIn == true || isBnIn == 1) {
-        await _tts.setLanguage("bn-IN");
-        dev.log('TtsService: Selected voice locale bn-IN');
-        return true;
-      }
-
-      // 3. Try generic Bangla
-      final isBn = await _tts.isLanguageAvailable("bn");
-      if (isBn == true || isBn == 1) {
-        await _tts.setLanguage("bn");
-        dev.log('TtsService: Selected voice locale bn');
-        return true;
-      }
-
-      // 4. Check installed language list
-      final languages = await _tts.getLanguages;
-      if (languages is List) {
-        for (final l in languages) {
-          final langStr = l?.toString().toLowerCase() ?? '';
-          if (langStr.startsWith('bn')) {
-            await _tts.setLanguage(l.toString());
-            dev.log('TtsService: Selected voice locale from list: $l');
-            return true;
-          }
+    }
+    final languages = await _tts.getLanguages;
+    if (languages is List) {
+      for (final l in languages) {
+        final code = l?.toString() ?? '';
+        if (code.toLowerCase().startsWith('bn') && _ok(await _tts.setLanguage(code))) {
+          dev.log('TtsService: Selected voice locale from list: $code');
+          return true;
         }
       }
+    }
+    return false;
+  }
 
-      // Attempt direct setLanguage("bn-BD") in case query is restricted
-      final result = await _tts.setLanguage("bn-BD");
-      if (result == 1 || result == true) {
-        return true;
+  /// Configures a Bangla voice. Returns false if none is installed (never falls back to English).
+  ///
+  /// The phone's default speech engine often has no Bangla (Samsung phones default to
+  /// Samsung TTS), while Google's engine on the same phone does. So when the current engine
+  /// has no Bangla, the other installed engines are tried, Google's first.
+  Future<bool> _configureBanglaLanguage() async {
+    try {
+      if (await _setBanglaOnCurrentEngine()) return true;
+      if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return false;
+
+      final engines = ((await _tts.getEngines) as List?)?.map((e) => e.toString()).toList() ?? const [];
+      final current = _engine ?? (await _tts.getDefaultEngine)?.toString();
+      final others = engines.where((e) => e != current).toList()
+        ..sort((a, b) => (b == _googleEngine ? 1 : 0) - (a == _googleEngine ? 1 : 0));
+      for (final engine in others) {
+        await _tts.setEngine(engine);
+        _engine = engine;
+        if (await _setBanglaOnCurrentEngine()) {
+          dev.log('TtsService: Using engine $engine for Bangla');
+          return true;
+        }
+      }
+      if (current != null && _engine != current) {
+        await _tts.setEngine(current);
+        _engine = current;
       }
     } catch (e) {
       dev.log('TtsService: Error during Bangla locale configuration: $e');
@@ -153,8 +157,24 @@ class TtsService {
     return false;
   }
 
+  static const _googleEngine = 'com.google.android.tts';
+  String? _engine;
+
+  Future<bool> _configureEnglishLanguage() async {
+    try {
+      for (final locale in const ['en-US', 'en-GB', 'en-IN', 'en']) {
+        if (_ok(await _tts.setLanguage(locale))) return true;
+      }
+    } catch (e) {
+      dev.log('TtsService: Error setting English voice: $e');
+    }
+    return false;
+  }
+
   /// Speak arbitrary text with language configuration and overlap protection.
   /// If [lang] is 'bn', it guarantees it will NOT fall back to English if Bangla is missing.
+  /// Returns false when nothing will be heard (no voice, or the engine refused the text),
+  /// so the caller can tell the user instead of showing a "Stop" button for silence.
   Future<bool> speakText(String text, {String lang = 'bn'}) async {
     final cleanText = text.trim();
     if (cleanText.isEmpty) return false;
@@ -163,29 +183,24 @@ class TtsService {
     // Stop any ongoing speech to prevent overlapping voices
     await stop();
 
-    if (lang == 'bn') {
-      final hasBangla = await _configureBanglaLanguage();
-      if (!hasBangla) {
-        dev.log('TtsService: Skipping speech because Bangla voice is unavailable on device.');
-        return false;
-      }
-    } else {
-      try {
-        await _tts.setLanguage('en-US');
-      } catch (_) {}
+    final hasVoice = lang == 'bn' ? await _configureBanglaLanguage() : await _configureEnglishLanguage();
+    if (!hasVoice) {
+      dev.log('TtsService: Skipping speech because no $lang voice is available on device.');
+      return false;
     }
 
     try {
       _ttsState = TtsState.playing;
       _stateController.add(TtsState.playing);
-      await _tts.speak(cleanText);
-      return true;
+      final result = await _tts.speak(cleanText);
+      if (_ok(result)) return true;
+      dev.log('TtsService: Engine refused to speak (result $result)');
     } catch (e) {
       dev.log('TtsService: Error speaking text: $e');
-      _ttsState = TtsState.stopped;
-      _stateController.add(TtsState.stopped);
-      return false;
     }
+    _ttsState = TtsState.stopped;
+    _stateController.add(TtsState.stopped);
+    return false;
   }
 
   /// Speaks the automatic overview announcement when medication alert triggers
@@ -207,12 +222,14 @@ class TtsService {
     required List<Medicine> medicines,
     required String? scheduledTime,
     bool isCurrentlyDue = false,
+    bool isTomorrow = false,
     String lang = 'bn',
   }) async {
     final text = MedicationVoiceService.buildHomeScheduleAnnouncement(
       medicines: medicines,
       scheduledTime: scheduledTime,
       isCurrentlyDue: isCurrentlyDue,
+      isTomorrow: isTomorrow,
       lang: lang,
     );
     return await speakText(text, lang: lang);

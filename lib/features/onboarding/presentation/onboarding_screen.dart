@@ -1,14 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/constants/app_colors.dart';
+import '../../../core/constants/app_strings.dart';
+import '../../../core/services/mock_data_service.dart';
 import '../../../shared/widgets/app_primary_button.dart';
 import '../../../shared/widgets/fade_slide_in.dart';
 
-class OnboardingScreen extends StatelessWidget {
+class OnboardingScreen extends ConsumerWidget {
   const OnboardingScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Language is chosen first, so this welcome screen is shown in the user's language.
+    final lang = ref.watch(appSettingsProvider).language;
+    String t(String key) => AppStrings.get(key, lang);
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
@@ -64,7 +70,7 @@ class OnboardingScreen extends StatelessWidget {
                 FadeSlideIn(
                   delay: const Duration(milliseconds: 150),
                   child: Text(
-                    'OsudSheba',
+                    t('onboarding_title'),
                     style: Theme.of(context).textTheme.displayMedium?.copyWith(
                           color: AppColors.primaryDark,
                           fontWeight: FontWeight.bold,
@@ -76,12 +82,12 @@ class OnboardingScreen extends StatelessWidget {
                 // Slogan
                 FadeSlideIn(
                   delay: const Duration(milliseconds: 300),
-                  child: const Text(
-                    'AI-powered medicine reminder for Bangladesh',
+                  child: Text(
+                    t('onboarding_subtitle'),
                     textAlign: TextAlign.center,
-                    style: TextStyle(
+                    style: const TextStyle(
                       color: AppColors.textSecondary,
-                      fontSize: 14.0,
+                      fontSize: 16.0,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -95,8 +101,8 @@ class OnboardingScreen extends StatelessWidget {
                   child: _buildHighlightCard(
                     context,
                     icon: Icons.document_scanner_rounded,
-                    title: 'Understand Prescriptions',
-                    description: 'Scan prescription photo using AI to auto-extract schedules.',
+                    title: t('highlight_1_title'),
+                    description: t('highlight_1_desc'),
                   ),
                 ),
                 const SizedBox(height: 8.0),
@@ -105,8 +111,8 @@ class OnboardingScreen extends StatelessWidget {
                   child: _buildHighlightCard(
                     context,
                     icon: Icons.alarm_rounded,
-                    title: 'Smart Reminders',
-                    description: 'Never miss a dose with app notifications and SMS alerts.',
+                    title: t('highlight_2_title'),
+                    description: t('highlight_2_desc'),
                   ),
                 ),
                 const SizedBox(height: 8.0),
@@ -115,8 +121,8 @@ class OnboardingScreen extends StatelessWidget {
                   child: _buildHighlightCard(
                     context,
                     icon: Icons.people_rounded,
-                    title: 'Family Monitoring',
-                    description: 'Let caregivers monitor and get alerted when you miss a dose.',
+                    title: t('highlight_3_title'),
+                    description: t('highlight_3_desc'),
                   ),
                 ),
                 
@@ -126,9 +132,9 @@ class OnboardingScreen extends StatelessWidget {
                 FadeSlideIn(
                   delay: const Duration(milliseconds: 900),
                   child: AppPrimaryButton(
-                    text: 'Get Started / শুরু করুন',
+                    text: t('get_started'),
                     icon: Icons.arrow_forward_rounded,
-                    onPressed: () => context.go('/language-selection'),
+                    onPressed: () => context.go('/role-selection'),
                   ),
                 ),
                         const SizedBox(height: 4.0),
@@ -196,7 +202,7 @@ class OnboardingScreen extends StatelessWidget {
                 Text(
                   description,
                   style: const TextStyle(
-                    fontSize: 12.5,
+                    fontSize: 13.5,
                     color: AppColors.textSecondary,
                     height: 1.25,
                   ),

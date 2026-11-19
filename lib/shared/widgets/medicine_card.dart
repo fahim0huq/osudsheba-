@@ -1,15 +1,36 @@
 import 'package:flutter/material.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/models/mock_models.dart';
+import 'tap_area.dart';
+import '../../core/utils/dose_text.dart';
 
 class MedicineCard extends StatefulWidget {
   final Medicine medicine;
   final VoidCallback onTap;
+  final String language;
 
   const MedicineCard({super.key,
     required this.medicine,
     required this.onTap,
+    this.language = 'en',
   });
+
+  static const Map<String, String> _bnStatus = {
+    'taken': 'খাওয়া হয়েছে',
+    'snoozed': 'পরে মনে করাবে',
+    'skipped': 'বাদ দেওয়া',
+    'missed': 'মিস হয়েছে',
+    'pending': 'বাকি আছে',
+    'not today': 'আজ নয়',
+    'paused': 'বন্ধ আছে',
+    'completed': 'শেষ হয়েছে',
+  };
+
+  static const Map<String, String> _bnMeal = {
+    'Before Meal': 'খাবারের আগে',
+    'After Meal': 'খাবারের পরে',
+    'With Meal': 'খাবারের সাথে',
+  };
 
   @override
   State<MedicineCard> createState() => _MedicineCardState();
@@ -75,7 +96,37 @@ class _MedicineCardState extends State<MedicineCard> with SingleTickerProviderSt
         statusIcon = Icons.schedule;
     }
 
-    return GestureDetector(
+    // At large text sizes the badge would squeeze the medicine name to a few letters,
+    // so it moves under the details instead of sitting beside them.
+    final largeText = MediaQuery.textScalerOf(context).scale(1.0) > 1.3;
+    final statusBadge = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+      decoration: BoxDecoration(
+        color: statusBgColor,
+        borderRadius: BorderRadius.circular(10.0),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(statusIcon, color: statusColor, size: 18),
+          const SizedBox(width: 4.0),
+          Flexible(
+            child: Text(
+              widget.language == 'bn'
+                  ? (MedicineCard._bnStatus[displayStatus.toLowerCase()] ?? displayStatus)
+                  : displayStatus,
+              style: TextStyle(
+                color: statusColor,
+                fontWeight: FontWeight.bold,
+                fontSize: 14.5,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    return TapArea(
       behavior: HitTestBehavior.opaque,
       onTapDown: (_) => _controller.forward(),
       onTapUp: (_) => _controller.reverse(),
@@ -86,7 +137,7 @@ class _MedicineCardState extends State<MedicineCard> with SingleTickerProviderSt
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
           margin: const EdgeInsets.only(bottom: 8.0),
-          padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
+          padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 14.0),
           decoration: BoxDecoration(
             color: AppColors.surface,
             borderRadius: BorderRadius.circular(16.0),
@@ -122,71 +173,61 @@ class _MedicineCardState extends State<MedicineCard> with SingleTickerProviderSt
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      '${widget.medicine.name} ${widget.medicine.strength}',
-                      maxLines: 1,
+                      '${widget.medicine.name} ${widget.medicine.strength}'.trim(),
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: AppColors.textPrimary,
                         fontWeight: FontWeight.bold,
-                        fontSize: 15,
+                        fontSize: 18,
                       ),
                     ),
                     const SizedBox(height: 2.0),
                     Text(
-                      '${widget.medicine.dose} • ${widget.medicine.mealRelation}',
-                      maxLines: 1,
+                      [
+                        doseLabel(widget.medicine, widget.language),
+                        if (widget.medicine.mealRelation.isNotEmpty && widget.medicine.mealRelation != 'None')
+                          widget.language == 'bn'
+                              ? (MedicineCard._bnMeal[widget.medicine.mealRelation] ?? widget.medicine.mealRelation)
+                              : widget.medicine.mealRelation,
+                      ].where((e) => e.trim().isNotEmpty).join(' • '),
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: AppColors.textSecondary,
-                        fontSize: 12.5,
+                        fontSize: 15.5,
                       ),
                     ),
                     const SizedBox(height: 3.0),
                     Row(
                       children: [
-                        const Icon(Icons.access_time_filled, size: 13, color: AppColors.primary),
+                        const Icon(Icons.access_time_filled, size: 18, color: AppColors.primary),
                         const SizedBox(width: 4.0),
                         Expanded(
                           child: Text(
                             widget.medicine.times.join(', '),
-                            maxLines: 1,
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               color: AppColors.textPrimary,
                               fontWeight: FontWeight.w600,
-                              fontSize: 12,
+                              fontSize: 15.5,
                             ),
                           ),
                         ),
                       ],
                     ),
+                    if (largeText) ...[
+                      const SizedBox(height: 6.0),
+                      statusBadge,
+                    ],
                   ],
                 ),
               ),
-              const SizedBox(width: 8.0),
-              // Status Badge
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
-                decoration: BoxDecoration(
-                  color: statusBgColor,
-                  borderRadius: BorderRadius.circular(10.0),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(statusIcon, color: statusColor, size: 12),
-                    const SizedBox(width: 4.0),
-                    Text(
-                      displayStatus.toUpperCase(),
-                      style: TextStyle(
-                        color: statusColor,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 10.5,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              if (!largeText) ...[
+                const SizedBox(width: 8.0),
+                statusBadge,
+              ],
             ],
           ),
         ),

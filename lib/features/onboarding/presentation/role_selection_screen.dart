@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_strings.dart';
+import '../../../core/constants/app_features.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../shared/widgets/app_primary_button.dart';
@@ -13,6 +14,9 @@ class RoleSelectionScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // With only one role available there is nothing to choose: continue as Patient.
+    if (!kCaregiverRoleEnabled) return const _ContinueAsPatient();
+
     final settings = ref.watch(appSettingsProvider);
     final profile = ref.watch(userProfileProvider);
     final lang = settings.language;
@@ -216,5 +220,39 @@ class RoleSelectionScreen extends ConsumerWidget {
         ),
       ),
     );
+  }
+}
+
+/// Used while the Caregiver role is switched off ([kCaregiverRoleEnabled]): records the
+/// Patient role and moves on exactly as tapping "Patient" then "Continue" would.
+class _ContinueAsPatient extends ConsumerStatefulWidget {
+  const _ContinueAsPatient();
+
+  @override
+  ConsumerState<_ContinueAsPatient> createState() => _ContinueAsPatientState();
+}
+
+class _ContinueAsPatientState extends ConsumerState<_ContinueAsPatient> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(appSettingsProvider.notifier).setRole('Patient');
+      ref.read(appSettingsProvider.notifier).setOnboardingCompleted(true);
+      final auth = ref.read(authServiceProvider).currentUser;
+      if (auth != null) {
+        final p = ref.read(userProfileProvider);
+        ref.read(userProfileProvider.notifier).updateProfile(p.copyWith(role: 'Patient'));
+        context.go(p.profileCompleted ? '/home' : '/patient-profile-setup');
+      } else {
+        context.go('/login');
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(body: Center(child: CircularProgressIndicator()));
   }
 }

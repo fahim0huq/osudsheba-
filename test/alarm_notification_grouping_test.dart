@@ -227,7 +227,7 @@ void main() {
         isCurrentlyDue: false,
         lang: 'bn',
       );
-      expect(singleUpcoming, contains('পরবর্তী ওষুধ খাওয়ার সময় 08:00 PM।'));
+      expect(singleUpcoming, contains('পরবর্তী ওষুধ খাওয়ার সময় রাত ৮টায়।'));
       expect(singleUpcoming, contains('Napa 500 মিলিগ্রাম, ১টি ট্যাবলেট।'));
       expect(singleUpcoming, contains('খাবারের পরে খাবেন।'));
 
@@ -238,7 +238,7 @@ void main() {
         isCurrentlyDue: false,
         lang: 'bn',
       );
-      expect(groupUpcoming, contains('পরবর্তী ওষুধ খাওয়ার সময় 08:00 PM।'));
+      expect(groupUpcoming, contains('পরবর্তী ওষুধ খাওয়ার সময় রাত ৮টায়।'));
       expect(groupUpcoming, contains('Napa এবং Omeprazole — এই ২টি ওষুধ।'));
 
       // Grouped medicines currently due
@@ -248,7 +248,7 @@ void main() {
         isCurrentlyDue: true,
         lang: 'bn',
       );
-      expect(groupDue, contains('এখন আপনার ওষুধ খাওয়ার সময় হয়েছে।'));
+      expect(groupDue, contains('এখন আপনার ওষুধ খাওয়ার সময় হয়েছে।'));
       expect(groupDue, contains('Napa এবং Omeprazole — এই ২টি ওষুধ।'));
 
       // Empty medicines
@@ -257,7 +257,7 @@ void main() {
         scheduledTime: null,
         lang: 'bn',
       );
-      expect(emptyText, equals('এই সময়ের জন্য কোনো ওষুধ নির্ধারিত নেই।'));
+      expect(emptyText, equals('এই সময়ের জন্য কোনো ওষুধ নির্ধারিত নেই।'));
     });
   });
 }

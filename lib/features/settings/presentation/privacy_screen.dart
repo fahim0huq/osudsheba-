@@ -57,40 +57,40 @@ class PrivacyScreen extends ConsumerWidget {
                 delay: const Duration(milliseconds: 150),
                 child: _buildPrivacySection(
                   context,
-                  title: lang == 'bn' ? 'স্বাস্থ্য তথ্য সংরক্ষণ' : '1. Health Data Storage',
+                  title: lang == 'bn' ? 'আপনার তথ্য ও ব্যাকআপ' : '1. Your Data and Backup',
                   description: lang == 'bn'
-                      ? 'আপনার ওষুধের তালিকা এবং ইতিহাস শুধুমাত্র আপনার ফোনেই সংরক্ষিত থাকে। আমরা কোন দূরবর্তী সার্ভারে এগুলো পাঠাই না।'
-                      : 'Your medication logs and schedules are stored securely on your local device. We do not sell or track your health data.',
+                      ? 'আপনার ওষুধের তালিকা, ডোজের ইতিহাস ও প্রোফাইল এই ফোনে থাকে। সেটিংসে "অ্যাকাউন্টে ব্যাকআপ" চালু করলে (আপনি চালু না করা পর্যন্ত এটি বন্ধ থাকে) ওষুধের তালিকা ও ডোজের ইতিহাস আপনার অ্যাকাউন্টে Google Firebase-এও রাখা হয়, যাতে নতুন ফোনে সব ফিরে পান। এই ব্যাকআপ শুধু আপনি আর আপনার অনুমতি পাওয়া পরিবারের সদস্যরা দেখতে পারেন। যেকোনো সময় ব্যাকআপ বন্ধ করে মুছে দিতে পারেন। লগইনের জন্য আপনার ইমেইল বা ফোন নম্বর Google Firebase-এ থাকে। সাবস্ক্রিপশনের জন্য আপনার মোবাইল নম্বর বিল-প্রদানকারী (AppsPro/BDApps ও আপনার অপারেটর)-এর কাছে যায়। আমরা আপনার তথ্য বিক্রি করি না।'
+                      : 'Your medicine list, dose history and profile are kept on this phone. If you turn on Account Backup in Settings (it stays off until you turn it on), your medicine list and dose history are also saved in your account on Google Firebase, so you can get them back on a new phone. Only you and family members you approve can see this backup. You can turn backup off and delete it at any time. To sign in, your email or phone number is kept by Google Firebase. For the subscription, your mobile number is shared with the billing provider (AppsPro/BDApps) and your mobile operator. We do not sell your data.',
                 ),
               ),
               FadeSlideIn(
                 delay: const Duration(milliseconds: 200),
                 child: _buildPrivacySection(
                   context,
-                  title: lang == 'bn' ? 'প্রেসক্রিপশন এআই বিশ্লেষণ' : '2. Prescription Image Scanning',
+                  title: lang == 'bn' ? 'প্রেসক্রিপশন স্ক্যান' : '2. Prescription Scanning',
                   description: lang == 'bn'
-                      ? 'আপনার প্রেসক্রিপশনের ছবি প্রসেস করার জন্য আমাদের এআই মডিউল ব্যবহার করা হয়। ছবিগুলো বিশ্লেষণ শেষে সার্ভার থেকে সাথে সাথে মুছে ফেলা হয়।'
-                      : 'Prescription photos uploaded for AI analysis are processed dynamically and deleted from the temporary nodes immediately after schedule extraction.',
+                      ? 'প্রেসক্রিপশন বা ওষুধের প্যাকেটের ছবি আপনার ফোনেই পড়া হয়, অ্যাপের সাথে থাকা বাংলাদেশের ওষুধের তালিকার সাথে মিলিয়ে। ছবিটি কোনো সার্ভার বা বাইরের এআই সেবায় পাঠানো হয় না। আপনি যে ওষুধগুলো সংরক্ষণ করেন শুধু সেগুলোই রাখা হয়, ছবি নয়।'
+                      : 'Prescription and medicine packet photos are read on your phone and matched against a list of Bangladeshi medicines that comes with the app. The photo is not sent to any server or outside AI service. Only the medicines you save are kept, not the photo.',
                 ),
               ),
               FadeSlideIn(
                 delay: const Duration(milliseconds: 250),
                 child: _buildPrivacySection(
                   context,
-                  title: lang == 'bn' ? 'তত্ত্বাবধায়কের সাথে তথ্য বিনিময়' : '3. Family Monitoring Link',
+                  title: lang == 'bn' ? 'পরিবারের সাথে শেয়ার' : '3. Sharing with Family',
                   description: lang == 'bn'
-                      ? 'শুধুমাত্র আপনার অনুমোদিত কেয়ারগিভার আপনার ওষুধের অগ্রগতির রিপোর্ট দেখতে পারবে।'
-                      : 'Compliance metrics are only shared with caregivers/family members whom you explicitly invite or permit via your dashboard.',
+                      ? 'আপনি কাউকে আমন্ত্রণ না জানালে কিছুই শেয়ার হয় না। পরিবারের সদস্যকে একবার ব্যবহারের একটি আমন্ত্রণ কোড দিতে পারেন; আপনি অনুমতি দেওয়ার পরেই তিনি আপনার তথ্য দেখতে পারবেন। অনুমতি পাওয়া সদস্য আপনার নাম, ওষুধের তালিকা এবং কোন ডোজ খেয়েছেন, বাদ দিয়েছেন বা মিস করেছেন তা দেখতে পারেন (এজন্য অ্যাকাউন্টে ব্যাকআপ চালু হয়), আর আপনাকে রিমাইন্ডার পাঠাতে পারেন। তিনি আপনার ওষুধ বদলাতে পারেন না। "পরিবার" অংশ থেকে যেকোনো সময় কাউকে সরিয়ে দিতে পারেন।'
+                      : 'Nothing is shared unless you invite someone. You can give a family member a one-time invite code; they can see your information only after you approve them. An approved family member can see your name, your medicine list and which doses you took, skipped or missed (this needs Account Backup, which is turned on), and can send you reminders. They cannot change your medicines. You can remove anyone at any time from the Family tab.',
                 ),
               ),
               FadeSlideIn(
                 delay: const Duration(milliseconds: 300),
                 child: _buildPrivacySection(
                   context,
-                  title: lang == 'bn' ? 'তথ্য মুছে ফেলার অনুরোধ' : '4. Data Deletion Request',
+                  title: lang == 'bn' ? 'তথ্য মুছে ফেলা' : '4. Deleting Your Data',
                   description: lang == 'bn'
-                      ? 'আপনি চাইলে সেটিংস থেকে যেকোনো সময় আপনার সব তথ্য স্থায়ীভাবে মুছে ফেলতে পারেন।'
-                      : 'You can delete all application logs and setup details permanently at any time by selecting the clean data option.',
+                      ? 'সেটিংস > "সব লোকাল ডেটা মুছুন" দিয়ে এই ফোনের সব তথ্য মুছতে পারেন। সেটিংস > "আমার অ্যাকাউন্ট মুছে ফেলুন" দিলে সাবস্ক্রিপশন বন্ধ হয় এবং আপনার লগইন অ্যাকাউন্ট, ব্যাকআপ, পরিবারের সংযোগ ও সাবস্ক্রিপশনের রেকর্ডও মুছে যায়।'
+                      : 'Settings > "Delete All Local Data" removes everything stored on this phone. Settings > "Delete my account" stops the subscription and also deletes your sign-in account, your backup, your family links and your subscription record.',
                 ),
               ),
               const SizedBox(height: 20.0),

@@ -5,8 +5,13 @@ import 'package:uuid/uuid.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/models/mock_models.dart';
 import '../../../core/services/mock_data_service.dart';
+import '../../../core/services/notification_service.dart';
+import '../../../core/services/phone_actions.dart';
+import '../../../core/utils/time_utils.dart';
+import '../../../shared/widgets/confirm_dialog.dart';
 import '../../../shared/widgets/app_primary_button.dart';
 import '../../../shared/widgets/fade_slide_in.dart';
+import '../../../core/utils/dose_text.dart';
 
 class DoseActionScreen extends ConsumerWidget {
   final Medicine? medicine;
@@ -30,29 +35,45 @@ class DoseActionScreen extends ConsumerWidget {
     if (medicine != null) {
       targetMedicines.add(medicine!);
     } else {
-      final matches = medList.where((m) => m.status == 'active' && m.times.contains(scheduledTime)).toList();
+      final matches = medList
+          .where((m) => m.status == 'active' && m.times.any((t) => sameTimeOfDay(t, scheduledTime)))
+          .toList();
       if (matches.isNotEmpty) {
         targetMedicines.addAll(matches);
       } else {
         final selected = ref.watch(selectedMedicineProvider);
         if (selected != null) {
           targetMedicines.add(selected);
-        } else if (medList.isNotEmpty) {
-          targetMedicines.add(medList.first);
         }
+        // Never fall back to an arbitrary medicine: logging a dose against the wrong
+        // medicine would corrupt the patient's record.
       }
     }
 
     if (targetMedicines.isEmpty) {
       return Scaffold(
         appBar: AppBar(title: Text(lang == 'bn' ? 'ওষুধ খাওয়ার অ্যাকশন' : 'Dose Action')),
-        body: const Center(child: Text('No dose data available.')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Text(
+              lang == 'bn'
+                  ? 'এই সময়ের কোনো ওষুধ পাওয়া যায়নি।'
+                  : 'No medicine is scheduled for this time.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 18.0),
+            ),
+          ),
+        ),
       );
     }
 
     final title = lang == 'bn' ? 'ওষুধ সেবন' : 'Dose Action';
 
+    final slot = normalizeTimeString(scheduledTime) ?? scheduledTime;
+
     void onTakenAll() {
+      NotificationService.instance.dismissTimeSlot(slot);
       for (final med in targetMedicines) {
         ref.read(doseLogsProvider.notifier).addLog(
               DoseLog(
@@ -74,7 +95,11 @@ class DoseActionScreen extends ConsumerWidget {
       context.go('/home');
     }
 
-    void onSnoozeAll() {
+    Future<void> onSnoozeAll() async {
+      await NotificationService.instance.dismissTimeSlot(slot);
+      // Actually set the 10-minute reminder (previously this only showed a message).
+      await NotificationService.instance.scheduleSnoozeForTimeGroup(slot, targetMedicines, 10);
+      if (!context.mounted) return;
       for (final med in targetMedicines) {
         ref.read(doseLogsProvider.notifier).addLog(
               DoseLog(
@@ -96,7 +121,20 @@ class DoseActionScreen extends ConsumerWidget {
       context.go('/home');
     }
 
-    void onSkipAll() {
+    Future<void> onSkipAll() async {
+      final confirmed = await showConfirmDialog(
+        context,
+        title: lang == 'bn' ? 'এই ডোজ বাদ দেবেন?' : 'Skip this dose?',
+        message: lang == 'bn'
+            ? 'এই ডোজটি "বাদ দেওয়া হয়েছে" হিসেবে রেকর্ড হবে এবং আজ এই সময়ের জন্য আর অ্যালার্ম বাজবে না। ডাক্তারের পরামর্শ ছাড়া ওষুধ বাদ দেবেন না।'
+            : 'This dose will be recorded as skipped and the alarm will not ring again for this time today. Do not skip medicines unless your doctor told you to.',
+        confirmLabel: lang == 'bn' ? 'হ্যাঁ, বাদ দিন' : 'Yes, skip it',
+        cancelLabel: lang == 'bn' ? 'না, ফিরে যান' : 'No, go back',
+        icon: Icons.skip_next_rounded,
+      );
+      if (!confirmed) return;
+      await NotificationService.instance.dismissTimeSlot(slot);
+      if (!context.mounted) return;
       for (final med in targetMedicines) {
         ref.read(doseLogsProvider.notifier).addLog(
               DoseLog(
@@ -186,7 +224,7 @@ class DoseActionScreen extends ConsumerWidget {
                           '${targetMedicines.length} ${targetMedicines.length == 1 ? (lang == 'bn' ? 'টি ওষুধ' : 'med') : (lang == 'bn' ? 'টি ওষুধ' : 'meds')}',
                           style: const TextStyle(
                             color: Colors.white,
-                            fontSize: 12.0,
+                            fontSize: 13.5,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -246,7 +284,7 @@ class DoseActionScreen extends ConsumerWidget {
                                   ),
                                   const SizedBox(height: 2.0),
                                   Text(
-                                    '${lang == 'bn' ? 'ডোজ' : 'Dose'}: ${med.dose} • ${med.mealRelation}',
+                                    '${lang == 'bn' ? 'ডোজ' : 'Dose'}: ${doseLabel(med, lang)} • ${med.mealRelation}',
                                     style: const TextStyle(
                                       fontSize: 13.0,
                                       color: AppColors.textSecondary,
@@ -258,7 +296,7 @@ class DoseActionScreen extends ConsumerWidget {
                                     Text(
                                       med.instruction,
                                       style: const TextStyle(
-                                        fontSize: 12.0,
+                                        fontSize: 13.5,
                                         fontStyle: FontStyle.italic,
                                         color: AppColors.textSecondary,
                                       ),
@@ -282,9 +320,9 @@ class DoseActionScreen extends ConsumerWidget {
                   children: [
                     // TAKEN
                     SizedBox(
-                      height: 48.0,
+                      height: 64.0,
                       child: AppPrimaryButton(
-                        text: lang == 'bn' ? 'খেয়েছি (Taken)' : 'Taken',
+                        text: lang == 'bn' ? 'খেয়েছি' : 'I took it',
                         icon: Icons.check_circle_rounded,
                         backgroundColor: AppColors.success,
                         onPressed: onTakenAll,
@@ -294,9 +332,9 @@ class DoseActionScreen extends ConsumerWidget {
 
                     // SNOOZE
                     SizedBox(
-                      height: 44.0,
+                      height: 56.0,
                       child: AppPrimaryButton(
-                        text: lang == 'bn' ? '১০ মিনিট পর খাবো' : 'Snooze 10 min',
+                        text: lang == 'bn' ? '১০ মিনিট পর মনে করাও' : 'Remind me in 10 min',
                         icon: Icons.snooze_rounded,
                         backgroundColor: AppColors.warning,
                         onPressed: onSnoozeAll,
@@ -309,14 +347,14 @@ class DoseActionScreen extends ConsumerWidget {
                       children: [
                         Expanded(
                           child: SizedBox(
-                            height: 42.0,
+                            height: 56.0,
                             child: OutlinedButton.icon(
-                              icon: const Icon(Icons.block_rounded, color: AppColors.error, size: 16),
+                              icon: const Icon(Icons.block_rounded, color: AppColors.error, size: 22),
                               label: Text(
                                 lang == 'bn' ? 'বাদ দিন' : 'Skip',
                                 style: const TextStyle(
                                   color: AppColors.error,
-                                  fontSize: 13.5,
+                                  fontSize: 16.0,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
@@ -331,30 +369,24 @@ class DoseActionScreen extends ConsumerWidget {
                         const SizedBox(width: 10.0),
                         Expanded(
                           child: SizedBox(
-                            height: 42.0,
+                            height: 56.0,
                             child: ElevatedButton.icon(
-                              icon: const Icon(Icons.call_rounded, color: Colors.white, size: 16),
+                              icon: const Icon(Icons.call_rounded, color: Colors.white, size: 22),
                               label: Text(
-                                lang == 'bn' ? 'সাহায্য চান' : 'Call Caregiver',
+                                lang == 'bn' ? 'পরিবারকে কল' : 'Call family',
                                 style: const TextStyle(
                                   color: Colors.white,
-                                  fontSize: 13.5,
+                                  fontSize: 16.0,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.indigo,
+                                backgroundColor: AppColors.info,
                                 elevation: 0,
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.0)),
                               ),
-                              onPressed: () {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('${lang == 'bn' ? 'কল করা হচ্ছে' : 'Calling caregiver'} ${patientProfile.emergencyContact}...'),
-                                    backgroundColor: Colors.indigo,
-                                  ),
-                                );
-                              },
+                              // Opens the dialer with the saved family/emergency number.
+                              onPressed: () => PhoneActions.call(context, patientProfile.emergencyContact, lang: lang),
                             ),
                           ),
                         ),

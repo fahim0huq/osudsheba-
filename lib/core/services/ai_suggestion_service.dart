@@ -37,21 +37,22 @@ class AiSuggestionService {
 
     if (doseLogs.isEmpty) {
       suggestions.add(lang == 'bn'
-          ? 'ওষুধ খাওয়ার পর তা সম্পন্ন হিসেবে চিহ্নিত করুন যেন এআই আপনার অগ্রগতি ট্র্যাক করতে পারে।'
+          ? 'ওষুধ খাওয়া, বাদ দেওয়া বা পরে খাওয়া চিহ্নিত করা শুরু করুন, তাহলে আপনার জন্য পরামর্শ দেখাবে।'
           : 'Start marking doses as taken, skipped, or snoozed to receive personalized suggestions.');
       return suggestions;
     }
 
-    final totalLogs = doseLogs.length;
-    final takenLogs = doseLogs.where((l) => l.status.toLowerCase() == 'taken').length;
+    final resolved = doseLogs.where((l) => const {'taken', 'late', 'missed', 'skipped'}.contains(l.status.toLowerCase()));
+    final totalLogs = resolved.length;
+    final takenLogs = resolved.where((l) => const {'taken', 'late'}.contains(l.status.toLowerCase())).length;
 
     final double adherenceRate = totalLogs > 0 ? (takenLogs / totalLogs) : 1.0;
-    final int adherencePercent = (adherenceRate * 100).toInt();
+    final int adherencePercent = (adherenceRate * 100).round();
 
     if (adherencePercent < 70) {
       suggestions.add(lang == 'bn'
-          ? 'আপনার ওষুধ খাওয়ার হার খুব কম ($adherencePercent%)। অফলাইন এসএমএস রিমাইন্ডার বা পরিবারে মিসড-ডোজ অ্যালার্ট চালু করতে পারেন।'
-          : 'Your adherence is low ($adherencePercent%). Consider enabling SMS reminders or caregiver alerts.');
+          ? 'আপনার ওষুধ খাওয়ার হার কম ($adherencePercent%)। অ্যালার্ম বাজলে সাথে সাথে "খেয়েছি" চাপুন, এবং পরিবারের কাউকে দিনে একবার খোঁজ নিতে বলুন।'
+          : 'Your adherence is low ($adherencePercent%). Tap "Taken" as soon as the alarm rings, and ask a family member to check in with you once a day.');
     }
 
     int nightMissedOrSkipped = 0;

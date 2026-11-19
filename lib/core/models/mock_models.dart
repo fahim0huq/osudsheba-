@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
-enum MedicineForm { tablet, capsule, syrup, injection }
+// Saved by name ('tablet', 'drops', ...): add new forms at the end, never rename.
+enum MedicineForm { tablet, capsule, syrup, injection, drops }
 
 extension MedicineFormExtension on MedicineForm {
   String get displayName {
@@ -13,6 +14,23 @@ extension MedicineFormExtension on MedicineForm {
         return 'Syrup';
       case MedicineForm.injection:
         return 'Injection';
+      case MedicineForm.drops:
+        return 'Drops';
+    }
+  }
+
+  String get bnName {
+    switch (this) {
+      case MedicineForm.tablet:
+        return 'ট্যাবলেট';
+      case MedicineForm.capsule:
+        return 'ক্যাপসুল';
+      case MedicineForm.syrup:
+        return 'সিরাপ';
+      case MedicineForm.injection:
+        return 'ইনজেকশন';
+      case MedicineForm.drops:
+        return 'ড্রপ';
     }
   }
 
@@ -26,9 +44,63 @@ extension MedicineFormExtension on MedicineForm {
         return Icons.wine_bar;
       case MedicineForm.injection:
         return Icons.vaccines;
+      case MedicineForm.drops:
+        return Icons.water_drop_rounded;
+    }
+  }
+
+  /// The usual single dose, pre-filled in the Dose field when this type is picked.
+  String get defaultDose {
+    switch (this) {
+      case MedicineForm.tablet:
+        return '1 Tablet';
+      case MedicineForm.capsule:
+        return '1 Capsule';
+      case MedicineForm.syrup:
+        return '5ml';
+      case MedicineForm.injection:
+        return '1 ml';
+      case MedicineForm.drops:
+        return '1 Drop';
     }
   }
 }
+
+/// Defaults used by earlier versions; still treated as "not typed by the user".
+const _legacyDefaultDoses = ['1 injection'];
+
+/// The Dose text after the medicine type changes from [from] to [to]: switches to the new
+/// type's default only if the dose was empty or still a default, so a dose the user
+/// typed ("½ Tablet", "2 drops") is never overwritten.
+String doseAfterFormChange(String currentDose, MedicineForm from, MedicineForm to) {
+  final dose = currentDose.trim().toLowerCase();
+  final untouched = dose.isEmpty ||
+      _legacyDefaultDoses.contains(dose) ||
+      MedicineForm.values.any((f) => f.defaultDose.toLowerCase() == dose);
+  return untouched ? to.defaultDose : currentDose;
+}
+
+final _mlAmount = RegExp(r'^\s*(\d+(?:[.,]\d+)?|[.,]\d+)\s*(?:ml|mL|ML|মিলি)?\s*$');
+
+/// Injections are entered as a number of ml (the field shows "ml" after it, like the marks
+/// on a syringe). Saved dose "2 ml" -> field text "2"; other types are shown as saved.
+String doseFieldText(String savedDose, MedicineForm form) {
+  if (form != MedicineForm.injection) return savedDose;
+  final m = _mlAmount.firstMatch(savedDose);
+  return m == null ? savedDose : m.group(1)!.replaceAll(',', '.');
+}
+
+/// Field text -> saved dose: an injection amount "2" is saved as "2 ml".
+String doseForSave(String fieldText, MedicineForm form) {
+  final text = fieldText.trim();
+  if (form != MedicineForm.injection) return text;
+  final m = _mlAmount.firstMatch(text);
+  return m == null ? text : '${m.group(1)!.replaceAll(',', '.')} ml';
+}
+
+/// What the Dose field should show after switching type (see [doseAfterFormChange]).
+String doseFieldAfterFormChange(String fieldText, MedicineForm from, MedicineForm to) =>
+    doseFieldText(doseAfterFormChange(doseForSave(fieldText, from), from, to), to);
 
 class Medicine {
   final String id;
@@ -72,6 +144,7 @@ class Medicine {
     DateTime? endDate,
     String? status,
     DateTime? createdAt,
+    bool clearEndDate = false,
   }) {
     return Medicine(
       id: id ?? this.id,
@@ -83,7 +156,7 @@ class Medicine {
       mealRelation: mealRelation ?? this.mealRelation,
       instruction: instruction ?? this.instruction,
       startDate: startDate ?? this.startDate,
-      endDate: endDate ?? this.endDate,
+      endDate: clearEndDate ? null : (endDate ?? this.endDate),
       status: status ?? this.status,
       createdAt: createdAt ?? this.createdAt,
     );
@@ -136,6 +209,14 @@ class DoseLog {
   final String status; // "taken" | "missed" | "skipped" | "snoozed" | "late"
   final String? note;
 
+  /// The day the dose was due, "yyyy-MM-dd". Older logs lack it: it is then taken from
+  /// [actualTime] (see [effectiveScheduledDate]). Needed to tell which day a dose
+  /// belongs to once logs are synced and read elsewhere (family view, server checks).
+  final String? scheduledDate;
+
+  /// [scheduledDate], or the date part of [actualTime] for older logs.
+  String? get effectiveScheduledDate => scheduledDate ?? (actualTime == null ? null : dateKey(actualTime!));
+
   // Backwards compatibility getter/setter:
   DateTime? get takenTime => actualTime;
 
@@ -147,7 +228,21 @@ class DoseLog {
     this.actualTime,
     required this.status,
     this.note,
+    this.scheduledDate,
   });
+
+  DoseLog copyWith({String? id, String? scheduledTime, DateTime? actualTime, String? status, String? scheduledDate}) {
+    return DoseLog(
+      id: id ?? this.id,
+      medicineId: medicineId,
+      medicineName: medicineName,
+      scheduledTime: scheduledTime ?? this.scheduledTime,
+      actualTime: actualTime ?? this.actualTime,
+      status: status ?? this.status,
+      note: note,
+      scheduledDate: scheduledDate ?? this.scheduledDate,
+    );
+  }
 
   Map<String, dynamic> toJson() {
     return {
@@ -158,6 +253,7 @@ class DoseLog {
       'actualTime': actualTime?.toIso8601String(),
       'status': status,
       'note': note,
+      'scheduledDate': scheduledDate,
     };
   }
 
@@ -170,16 +266,29 @@ class DoseLog {
       actualTime: json['actualTime'] != null ? DateTime.tryParse(json['actualTime'] as String) : null,
       status: json['status'] as String? ?? 'taken',
       note: json['note'] as String?,
+      scheduledDate: json['scheduledDate'] as String?,
     );
   }
 }
 
+/// "yyyy-MM-dd" for a local date.
+String dateKey(DateTime d) =>
+    '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
 class CaregiverAlert {
   final String id;
+  // English text, kept for older app versions and the cloud copy. Screens build the
+  // shown text from the fields below instead (see core/utils/alert_text.dart).
   final String title;
   final String message;
   final String severity; // "High" | "Medium" | "Low"
   final String time;
+
+  /// What happened: 'missed_dose' or 'no_medicines'. Null on alerts saved before this field.
+  final String? kind;
+  final String? medicineName;
+  final String? scheduledTime; // canonical "hh:mm AM"
+  final DateTime? occurredAt;
 
   CaregiverAlert({
     required this.id,
@@ -187,6 +296,10 @@ class CaregiverAlert {
     required this.message,
     required this.severity,
     required this.time,
+    this.kind,
+    this.medicineName,
+    this.scheduledTime,
+    this.occurredAt,
   });
 
   Map<String, dynamic> toJson() {
@@ -196,6 +309,10 @@ class CaregiverAlert {
       'message': message,
       'severity': severity,
       'time': time,
+      if (kind != null) 'kind': kind,
+      if (medicineName != null) 'medicineName': medicineName,
+      if (scheduledTime != null) 'scheduledTime': scheduledTime,
+      if (occurredAt != null) 'occurredAt': occurredAt!.toIso8601String(),
     };
   }
 
@@ -206,6 +323,10 @@ class CaregiverAlert {
       message: json['message'] as String? ?? '',
       severity: json['severity'] as String? ?? 'Low',
       time: json['time'] as String? ?? '',
+      kind: json['kind'] as String?,
+      medicineName: json['medicineName'] as String?,
+      scheduledTime: json['scheduledTime'] as String?,
+      occurredAt: DateTime.tryParse(json['occurredAt'] as String? ?? ''),
     );
   }
 }
@@ -214,26 +335,28 @@ class AppSettings {
   final String languageCode; // "en" | "bn"
   final String userRole; // "Patient" | "Caregiver" | "None"
   final bool appNotificationsEnabled;
-  final bool smsRemindersEnabled;
   final bool caregiverAlertsEnabled;
-  final bool dailySummaryEnabled;
   final bool onboardingCompleted;
+  /// In-app text size multiplier (1.0 normal, 1.1 default, 1.25 large, 1.4 extra large).
+  /// Applied on top of the phone's own font-size setting.
+  final double textScale;
+  /// Back up medicines and dose history to the user's account (Firestore). Off until the
+  /// user turns it on: it sends health data to the cloud.
+  final bool cloudBackupEnabled;
 
   // Backwards compatibility getters:
   String get language => languageCode;
   bool get appNotifications => appNotificationsEnabled;
-  bool get smsReminders => smsRemindersEnabled;
   bool get caregiverAlerts => caregiverAlertsEnabled;
-  bool get dailySummarySms => dailySummaryEnabled;
 
   AppSettings({
     this.languageCode = 'en',
     this.userRole = 'None',
     this.appNotificationsEnabled = true,
-    this.smsRemindersEnabled = false,
     this.caregiverAlertsEnabled = true,
-    this.dailySummaryEnabled = false,
     this.onboardingCompleted = false,
+    this.textScale = 1.1,
+    this.cloudBackupEnabled = false,
   });
 
   AppSettings copyWith({
@@ -242,22 +365,20 @@ class AppSettings {
     String? userRole,
     bool? appNotificationsEnabled,
     bool? appNotifications, // old alias
-    bool? smsRemindersEnabled,
-    bool? smsReminders, // old alias
     bool? caregiverAlertsEnabled,
     bool? caregiverAlerts, // old alias
-    bool? dailySummaryEnabled,
-    bool? dailySummarySms, // old alias
     bool? onboardingCompleted,
+    double? textScale,
+    bool? cloudBackupEnabled,
   }) {
     return AppSettings(
       languageCode: languageCode ?? language ?? this.languageCode,
       userRole: userRole ?? this.userRole,
       appNotificationsEnabled: appNotificationsEnabled ?? appNotifications ?? this.appNotificationsEnabled,
-      smsRemindersEnabled: smsRemindersEnabled ?? smsReminders ?? this.smsRemindersEnabled,
       caregiverAlertsEnabled: caregiverAlertsEnabled ?? caregiverAlerts ?? this.caregiverAlertsEnabled,
-      dailySummaryEnabled: dailySummaryEnabled ?? dailySummarySms ?? this.dailySummaryEnabled,
       onboardingCompleted: onboardingCompleted ?? this.onboardingCompleted,
+      textScale: textScale ?? this.textScale,
+      cloudBackupEnabled: cloudBackupEnabled ?? this.cloudBackupEnabled,
     );
   }
 
@@ -266,10 +387,10 @@ class AppSettings {
       'languageCode': languageCode,
       'userRole': userRole,
       'appNotificationsEnabled': appNotificationsEnabled,
-      'smsRemindersEnabled': smsRemindersEnabled,
       'caregiverAlertsEnabled': caregiverAlertsEnabled,
-      'dailySummaryEnabled': dailySummaryEnabled,
       'onboardingCompleted': onboardingCompleted,
+      'textScale': textScale,
+      'cloudBackupEnabled': cloudBackupEnabled,
     };
   }
 
@@ -278,10 +399,10 @@ class AppSettings {
       languageCode: json['languageCode'] as String? ?? json['language'] as String? ?? 'en',
       userRole: json['userRole'] as String? ?? 'None',
       appNotificationsEnabled: json['appNotificationsEnabled'] as bool? ?? json['appNotifications'] as bool? ?? true,
-      smsRemindersEnabled: json['smsRemindersEnabled'] as bool? ?? json['smsReminders'] as bool? ?? false,
       caregiverAlertsEnabled: json['caregiverAlertsEnabled'] as bool? ?? json['caregiverAlerts'] as bool? ?? true,
-      dailySummaryEnabled: json['dailySummaryEnabled'] as bool? ?? json['dailySummarySms'] as bool? ?? false,
       onboardingCompleted: json['onboardingCompleted'] as bool? ?? false,
+      textScale: ((json['textScale'] as num?)?.toDouble() ?? 1.1).clamp(1.0, 1.5).toDouble(),
+      cloudBackupEnabled: json['cloudBackupEnabled'] as bool? ?? false,
     );
   }
 }

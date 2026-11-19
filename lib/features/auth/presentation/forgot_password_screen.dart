@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_strings.dart';
+import '../../../core/services/auth_service.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../shared/widgets/app_primary_button.dart';
 import '../../../shared/widgets/fade_slide_in.dart';
@@ -36,15 +37,24 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
     });
 
     try {
-      // Simulate network request
-      await Future.delayed(const Duration(milliseconds: 1500));
-      setState(() {
-        _isSuccess = true;
-      });
+      // Before, this only waited 1.5 s and showed "sent" without sending anything.
+      await ref.read(authServiceProvider).sendPasswordReset(_emailController.text);
+      if (mounted) setState(() => _isSuccess = true);
     } catch (e) {
-      setState(() {
-        _errorMessage = e.toString();
-      });
+      if (!mounted) return;
+      final bn = ref.read(appSettingsProvider).language == 'bn';
+      final text = e.toString();
+      final String message;
+      if (text.contains('Network')) {
+        message = bn ? 'ইন্টারনেট সংযোগ নেই। সংযোগ দেখে আবার চেষ্টা করুন।' : 'No internet connection. Check it and try again.';
+      } else if (text.contains('Too many')) {
+        message = bn ? 'অনেকবার চেষ্টা করা হয়েছে। কিছুক্ষণ পরে আবার চেষ্টা করুন।' : 'Too many tries. Please wait a while and try again.';
+      } else if (text.contains('Invalid email')) {
+        message = AppStrings.get('email_invalid', bn ? 'bn' : 'en');
+      } else {
+        message = bn ? 'লিংক পাঠানো যায়নি। আবার চেষ্টা করুন।' : 'Could not send the link. Please try again.';
+      }
+      setState(() => _errorMessage = message);
     } finally {
       if (mounted) {
         setState(() {

@@ -7,6 +7,8 @@ import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import '../models/mock_models.dart';
+import '../utils/schedule_utils.dart';
+import '../utils/time_utils.dart';
 import 'local_storage_service.dart';
 
 class NotificationService {
@@ -24,36 +26,10 @@ class NotificationService {
   /// Channel ID for high-importance medication alarms
   static const String channelId = 'medication_alarms_channel_v2';
   static const String channelName = 'Medication Alarms';
-  static const String channelDesc = 'High-priority full-screen medication reminders and alarms.';
+  static const String channelDesc = 'High-priority medication reminders and alarms.';
 
-  /// Helper to parse time string (e.g. "08:00 AM") to hour and minute
-  Map<String, int>? _parseTime(String timeStr) {
-    final RegExp regex = RegExp(r'^(\d{1,2}):(\d{2})\s*(AM|PM)$', caseSensitive: false);
-    final match = regex.firstMatch(timeStr.trim());
-    if (match == null) return null;
-
-    int hour = int.parse(match.group(1)!);
-    final int minute = int.parse(match.group(2)!);
-    final String ampm = match.group(3)!.toUpperCase();
-
-    if (ampm == 'PM' && hour < 12) {
-      hour += 12;
-    } else if (ampm == 'AM' && hour == 12) {
-      hour = 0;
-    }
-    return {'hour': hour, 'minute': minute};
-  }
-
-  /// Unique notification ID builder per distinct scheduled time slot
-  /// Ensures all medicines for that time slot share the same single notification alert.
-  int getTimeSlotNotificationId(String timeStr) {
-    return timeStr.trim().toUpperCase().hashCode & 0x7FFFFFFF;
-  }
-
-  /// Unique notification ID for a specific medicine + time slot (fallback / compatibility)
-  int getNotificationId(String medicineId, String timeStr) {
-    return (medicineId.hashCode ^ timeStr.trim().toUpperCase().hashCode) & 0x7FFFFFFF;
-  }
+  /// Channel for reminders sent by family (must match the server's push channelId).
+  static const String familyChannelId = 'family_reminders';
 
   /// Initialize timezones, platform initialization settings, and channels
   Future<void> init() async {
@@ -65,8 +41,10 @@ class NotificationService {
       tz.setLocalLocation(tz.getLocation(timeZoneName));
       dev.log('NotificationService: Local timezone initialized to $timeZoneName');
     } catch (e) {
-      dev.log('NotificationService Error: Failed to detect local timezone: $e. Falling back to UTC.');
-      tz.setLocalLocation(tz.local);
+      // Falling back to UTC would make every alarm ring hours early/late (Bangladesh is
+      // UTC+6). Pick a zone that matches the phone's current UTC offset instead.
+      dev.log('NotificationService: timezone lookup failed ($e); matching by UTC offset.');
+      tz.setLocalLocation(_locationForCurrentOffset());
     }
 
     // 2. Initialization Settings
@@ -112,6 +90,37 @@ class NotificationService {
         audioAttributesUsage: AudioAttributesUsage.alarm,
       );
       await androidPlugin.createNotificationChannel(channel);
+      // Reminders a family member sends (push). Separate from medicine alarms, so they never
+      // ring like an alarm and can be silenced on their own in Android settings.
+      await androidPlugin.createNotificationChannel(const AndroidNotificationChannel(
+        familyChannelId,
+        'Family reminders',
+        description: 'Reminders sent by family members who help you with your medicines.',
+        importance: Importance.high,
+      ));
+    }
+  }
+
+  tz.Location _locationForCurrentOffset() {
+    final offset = DateTime.now().timeZoneOffset;
+    if (offset == const Duration(hours: 6)) return tz.getLocation('Asia/Dhaka');
+    final nowUtc = DateTime.now().toUtc().millisecondsSinceEpoch;
+    for (final loc in tz.timeZoneDatabase.locations.values) {
+      if (loc.timeZone(nowUtc).offset == offset.inMilliseconds) return loc;
+    }
+    return tz.UTC;
+  }
+
+  bool _permissionsRequested = false;
+
+  /// Requests notification/alarm permissions at most once per app session.
+  Future<void> ensurePermissionsRequested() async {
+    if (_permissionsRequested || kIsWeb) return;
+    _permissionsRequested = true;
+    try {
+      await requestPermissions();
+    } catch (e) {
+      dev.log('NotificationService: permission request failed: $e');
     }
   }
 
@@ -161,7 +170,8 @@ class NotificationService {
       playSound: true,
       enableVibration: true,
       category: AndroidNotificationCategory.alarm,
-      fullScreenIntent: true,
+      // No full-screen intent: USE_FULL_SCREEN_INTENT is not declared (Play policy).
+      fullScreenIntent: false,
       visibility: NotificationVisibility.public,
       audioAttributesUsage: AudioAttributesUsage.alarm,
       ongoing: true,
@@ -183,224 +193,343 @@ class NotificationService {
     );
   }
 
-  /// Group all active medicines by scheduled time string
-  Map<String, List<Medicine>> groupMedicinesByTime(List<Medicine> medicines) {
+
+  // ---------------------------------------------------------------------------
+  // Notification IDs
+  //
+  // Three separate ID spaces so they can never overwrite each other:
+  //  * repeating daily alarm for a time slot        -> 'slot|08:00 AM'
+  //  * one-off alarm for a slot on a specific date   -> 'day|08:00 AM|20261118'
+  //  * snooze for a slot                             -> 'snooze|08:00 AM'
+  // (Previously a snooze reused the daily slot ID, which silently replaced the
+  // repeating alarm with a one-shot one, and TAKEN cancelled the repeating alarm.)
+  // ---------------------------------------------------------------------------
+
+  static int _stableId(String key) {
+    // FNV-1a 32-bit: stable across app restarts and Dart versions (String.hashCode is not
+    // guaranteed to be), so IDs written by an earlier run can still be cancelled.
+    var hash = 0x811c9dc5;
+    for (final unit in key.codeUnits) {
+      hash ^= unit;
+      hash = (hash * 0x01000193) & 0xFFFFFFFF;
+    }
+    return hash & 0x7FFFFFFF;
+  }
+
+  static String _slotKey(String timeStr) => normalizeTimeString(timeStr) ?? timeStr.trim().toUpperCase();
+
+  /// ID of the repeating daily alarm for a time slot.
+  int getTimeSlotNotificationId(String timeStr) => _stableId('slot|${_slotKey(timeStr)}');
+
+  int _dayNotificationId(String timeStr, DateTime day) =>
+      _stableId('day|${_slotKey(timeStr)}|${day.year}${day.month.toString().padLeft(2, '0')}${day.day.toString().padLeft(2, '0')}');
+
+  int _snoozeNotificationId(String timeStr) => _stableId('snooze|${_slotKey(timeStr)}');
+
+  /// Legacy per-medicine ID (kept so alarms created by older app versions can be cancelled).
+  int getNotificationId(String medicineId, String timeStr) {
+    return (medicineId.hashCode ^ timeStr.trim().toUpperCase().hashCode) & 0x7FFFFFFF;
+  }
+
+  int _legacySlotId(String timeStr) => timeStr.trim().toUpperCase().hashCode & 0x7FFFFFFF;
+
+  /// How far ahead one-off alarms are created for medicines that have an end date.
+  /// Kept short because iOS only keeps the 64 nearest pending notifications; alarms are
+  /// rebuilt every time the app is opened, so the window keeps moving forward.
+  static const int scheduleHorizonDays = 10;
+
+  // ---------------------------------------------------------------------------
+  // Grouping
+  // ---------------------------------------------------------------------------
+
+  /// Groups medicines due on [day] (default: today) by canonical time slot.
+  /// Only active medicines whose start/end dates include [day] are included,
+  /// and times are normalised ("8:00 am" and "08:00 AM" share one slot).
+  Map<String, List<Medicine>> groupMedicinesByTime(List<Medicine> medicines, {DateTime? day}) {
+    final onDay = day ?? DateTime.now();
     final Map<String, List<Medicine>> grouped = {};
     for (final med in medicines) {
-      if (med.status.toLowerCase() != 'active') continue;
+      if (!med.isScheduledOn(onDay)) continue;
       for (final timeStr in med.times) {
-        final cleanTime = timeStr.trim();
-        if (cleanTime.isEmpty) continue;
-        grouped.putIfAbsent(cleanTime, () => []).add(med);
+        final slot = normalizeTimeString(timeStr);
+        if (slot == null) {
+          dev.log('NotificationService: Unparseable time "$timeStr" for ${med.name}; no alarm can be set for it.');
+          continue;
+        }
+        final list = grouped.putIfAbsent(slot, () => []);
+        if (!list.any((m) => m.id == med.id)) list.add(med);
       }
     }
     return grouped;
   }
 
-  /// Schedule a grouped alarm notification for all medicines due at [scheduledTime]
-  Future<void> scheduleForTimeGroup(String scheduledTime, List<Medicine> medicines) async {
-    if (kIsWeb || medicines.isEmpty) return;
+  // ---------------------------------------------------------------------------
+  // Scheduling
+  // ---------------------------------------------------------------------------
 
-    // Check if notifications enabled
+  Future<void> _serial = Future.value();
+  List<Medicine>? _queuedMeds;
+  List<DoseLog>? _queuedLogs;
+  bool _rescheduleQueued = false;
+
+  /// Rebuilds every medication alarm from the current medicines and today's dose logs.
+  ///
+  /// Calls are serialised and coalesced: rapid changes (e.g. saving three medicines from a
+  /// prescription) result in one consistent rebuild instead of interleaved cancel/schedule
+  /// races. Pending snoozes are preserved.
+  Future<void> rescheduleAll(List<Medicine> medicines, {List<DoseLog> logs = const []}) {
+    if (kIsWeb) return Future.value();
+    _queuedMeds = List.of(medicines);
+    _queuedLogs = List.of(logs);
+    if (_rescheduleQueued) return _serial;
+    _rescheduleQueued = true;
+    _serial = _serial.then((_) async {
+      _rescheduleQueued = false;
+      final meds = _queuedMeds ?? const <Medicine>[];
+      final lg = _queuedLogs ?? const <DoseLog>[];
+      try {
+        await _rescheduleNow(meds, lg);
+      } catch (e) {
+        dev.log('NotificationService Error: reschedule failed: $e');
+      }
+    });
+    return _serial;
+  }
+
+  Future<void> _rescheduleNow(List<Medicine> medicines, List<DoseLog> logs) async {
+    await _cancelScheduledExceptSnoozes();
+
     final AppSettings settings = LocalStorageService().getSettings() ?? AppSettings();
     if (!settings.appNotificationsEnabled) {
-      dev.log('NotificationService: App notifications are disabled. Skipping time group $scheduledTime');
+      await cancelAll(); // includes pending snoozes
+      dev.log('NotificationService: Reminders are turned off in settings; no alarms scheduled.');
       return;
     }
 
-    final parsed = _parseTime(scheduledTime);
-    if (parsed == null) return;
+    final now = tz.TZDateTime.now(tz.local);
+    final today = DateTime(now.year, now.month, now.day);
 
-    final int id = getTimeSlotNotificationId(scheduledTime);
-    final int hour = parsed['hour']!;
-    final int minute = parsed['minute']!;
-
-    // Calculate next instance of this specific time
-    final tz.TZDateTime now = tz.TZDateTime.now(tz.local);
-    tz.TZDateTime scheduledDate = tz.TZDateTime(tz.local, now.year, now.month, now.day, hour, minute);
-
-    // If scheduled time has already passed today, schedule for tomorrow
-    if (scheduledDate.isBefore(now)) {
-      scheduledDate = scheduledDate.add(const Duration(days: 1));
+    // Collect every slot used by any medicine during the horizon.
+    final slots = <String>{};
+    for (var d = 0; d <= scheduleHorizonDays; d++) {
+      slots.addAll(groupMedicinesByTime(medicines, day: today.add(Duration(days: d))).keys);
     }
 
-    final String lang = settings.language;
-    final int medCount = medicines.length;
-    
-    // Notification Title & Body
-    final String title = lang == 'bn'
-        ? (medCount > 1 ? 'ওষুধ খাওয়ার সময় ($medCountটি ওষুধ)' : 'ওষুধ খাওয়ার সময় হয়েছে!')
-        : (medCount > 1 ? 'Medication Alarm ($medCount medicines)' : 'Medication Reminder!');
+    var scheduled = 0;
+    for (final slot in slots) {
+      final t = parseTimeOfDay(slot)!;
 
+      // A medicine is "open-ended" if it has no end date inside the horizon.
+      bool isOpenEnded(Medicine m) =>
+          m.endDate == null || dateOnly(m.endDate!).isAfter(today.add(const Duration(days: scheduleHorizonDays)));
+
+      int? repeatingFromDay;
+      for (var d = 0; d <= scheduleHorizonDays; d++) {
+        final day = today.add(Duration(days: d));
+        final group = groupMedicinesByTime(medicines, day: day)[slot] ?? const <Medicine>[];
+        if (group.isEmpty) continue;
+
+        final fireAt = tz.TZDateTime(tz.local, day.year, day.month, day.day, t.hour, t.minute);
+        if (!fireAt.isAfter(now)) continue; // already passed
+        if (d == 0 && group.every((m) => hasDoseLog(logs, m.id, slot, day))) {
+          continue; // every dose in this slot was already taken/skipped today
+        }
+
+        if (group.any(isOpenEnded)) {
+          // From here on, a daily repeating alarm covers this slot indefinitely.
+          repeatingFromDay = d;
+          await _scheduleSlot(
+            id: getTimeSlotNotificationId(slot),
+            slot: slot,
+            medicines: group,
+            fireAt: fireAt,
+            repeatDaily: true,
+            lang: settings.language,
+          );
+          scheduled++;
+          break;
+        }
+
+        // Only fixed-course medicines here: schedule a one-off for this specific day,
+        // so alarms stop on the course's end date even if the app is never reopened.
+        await _scheduleSlot(
+          id: _dayNotificationId(slot, day),
+          slot: slot,
+          medicines: group,
+          fireAt: fireAt,
+          repeatDaily: false,
+          lang: settings.language,
+        );
+        scheduled++;
+      }
+      if (repeatingFromDay == null) {
+        dev.log('NotificationService: Slot $slot uses one-off alarms (fixed-course medicines).');
+      }
+    }
+    dev.log('NotificationService: Rescheduled $scheduled alarms across ${slots.length} time slots');
+  }
+
+  Future<void> _scheduleSlot({
+    required int id,
+    required String slot,
+    required List<Medicine> medicines,
+    required tz.TZDateTime fireAt,
+    required bool repeatDaily,
+    required String lang,
+    bool isSnooze = false,
+  }) async {
+    final medCount = medicines.length;
     final List<String> medSummaryList = medicines.map((m) => '${m.name} ${m.strength}'.trim()).toList();
+
+    final String title;
+    if (isSnooze) {
+      title = lang == 'bn' ? 'ওষুধ খাওয়ার সময় (আবার মনে করানো হচ্ছে)' : 'Medicine reminder (snoozed)';
+    } else {
+      title = lang == 'bn'
+          ? (medCount > 1 ? 'ওষুধ খাওয়ার সময় ($medCountটি ওষুধ)' : 'ওষুধ খাওয়ার সময় হয়েছে')
+          : (medCount > 1 ? 'Time for your medicines ($medCount)' : 'Time for your medicine');
+    }
     final String body = lang == 'bn'
-        ? 'এখন খাওয়ার সময়: ${medSummaryList.join(", ")}'
+        ? 'এখন খাওয়ার সময়: ${medSummaryList.join(", ")}'
         : 'Due now: ${medSummaryList.join(", ")}';
 
-    // Payload JSON with scheduled time and all associated medicine IDs
     final String payload = jsonEncode({
-      'scheduledTime': scheduledTime,
+      'scheduledTime': slot,
       'medicineId': medicines.first.id,
       'medicineIds': medicines.map((m) => m.id).toList(),
+      if (isSnooze) 'isSnooze': true,
     });
 
-    final platformDetails = _buildAlarmNotificationDetails(ticker: title);
+    final details = _buildAlarmNotificationDetails(ticker: title);
 
-    try {
-      await _plugin.zonedSchedule(
-        id,
-        title,
-        body,
-        scheduledDate,
-        platformDetails,
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-        uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-        matchDateTimeComponents: DateTimeComponents.time,
-        payload: payload,
-      );
-      dev.log('NotificationService: Scheduled grouped alarm $id for $scheduledTime with $medCount medicines (Target: $scheduledDate)');
-    } catch (e) {
-      dev.log('NotificationService Warning: Exact alarms failed ($e). Falling back to inexact scheduling.');
-      try {
-        await _plugin.zonedSchedule(
+    Future<void> schedule(AndroidScheduleMode mode) => _plugin.zonedSchedule(
           id,
           title,
           body,
-          scheduledDate,
-          platformDetails,
-          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+          fireAt,
+          details,
+          androidScheduleMode: mode,
           uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-          matchDateTimeComponents: DateTimeComponents.time,
+          matchDateTimeComponents: repeatDaily ? DateTimeComponents.time : null,
           payload: payload,
         );
-        dev.log('NotificationService: Scheduled fallback alarm $id for $scheduledTime');
+
+    try {
+      await schedule(AndroidScheduleMode.exactAllowWhileIdle);
+    } catch (e) {
+      // Exact alarm permission missing: still schedule, but warn the user in the app.
+      exactAlarmsUnavailable = true;
+      dev.log('NotificationService Warning: exact alarm failed ($e); falling back to inexact.');
+      try {
+        await schedule(AndroidScheduleMode.inexactAllowWhileIdle);
       } catch (err) {
-        dev.log('NotificationService Error: Failed to schedule fallback alarm: $err');
+        dev.log('NotificationService Error: could not schedule alarm $id for $slot: $err');
       }
     }
   }
 
-  /// Rebuild/reschedule all active alarms grouped by time slot
-  Future<void> rescheduleAll(List<Medicine> medicines) async {
-    if (kIsWeb) return;
-    
-    // 1. Cancel all current pending notifications
-    await cancelAll();
+  /// Set when the OS refused exact alarms; reminders may then arrive several minutes late.
+  bool exactAlarmsUnavailable = false;
 
-    // 2. Group active medicines by time slot
-    final grouped = groupMedicinesByTime(medicines);
-
-    // 3. Schedule 1 notification per distinct time slot
-    for (final entry in grouped.entries) {
-      await scheduleForTimeGroup(entry.key, entry.value);
+  Future<void> _cancelScheduledExceptSnoozes() async {
+    try {
+      final pending = await _plugin.pendingNotificationRequests();
+      for (final request in pending) {
+        var isSnooze = false;
+        final p = request.payload;
+        if (p != null) {
+          try {
+            isSnooze = (jsonDecode(p) as Map<String, dynamic>)['isSnooze'] == true;
+          } catch (_) {}
+        }
+        if (!isSnooze) await _plugin.cancel(request.id);
+      }
+    } catch (e) {
+      // pendingNotificationRequests can fail on some OEM builds; fall back to a full reset.
+      dev.log('NotificationService: pending lookup failed ($e); cancelling all.');
+      await cancelAll();
     }
-    dev.log('NotificationService: Rescheduled alarms for ${grouped.length} time slots');
   }
 
   /// Cancel all scheduled alarms in the system
   Future<void> cancelAll() async {
     if (kIsWeb) return;
-    await _plugin.cancelAll();
-    dev.log('NotificationService: Cancelled all scheduled notifications');
+    try {
+      await _plugin.cancelAll();
+      dev.log('NotificationService: Cancelled all scheduled notifications');
+    } catch (e) {
+      dev.log('NotificationService: cancelAll notice: $e');
+    }
   }
 
-  /// Cancel alarms for a specific medicine by inspecting payloads or rescheduling
+  /// Cancel alarms that mention a specific medicine (used before a full reschedule).
   Future<void> cancelForMedicine(String medicineId) async {
     if (kIsWeb) return;
     try {
       final List<PendingNotificationRequest> pending = await _plugin.pendingNotificationRequests();
       for (final request in pending) {
         final payloadStr = request.payload;
-        if (payloadStr != null) {
-          try {
-            final Map<String, dynamic> data = jsonDecode(payloadStr) as Map<String, dynamic>;
-            final List<dynamic>? medIds = data['medicineIds'] as List<dynamic>?;
-            if (data['medicineId'] == medicineId || (medIds != null && medIds.contains(medicineId))) {
-              await _plugin.cancel(request.id);
-              dev.log('NotificationService: Cancelled notification ${request.id} for medicine $medicineId');
-            }
-          } catch (_) {}
-        }
+        if (payloadStr == null) continue;
+        try {
+          final Map<String, dynamic> data = jsonDecode(payloadStr) as Map<String, dynamic>;
+          final List<dynamic>? medIds = data['medicineIds'] as List<dynamic>?;
+          if (data['medicineId'] == medicineId || (medIds != null && medIds.contains(medicineId))) {
+            await _plugin.cancel(request.id);
+          }
+        } catch (_) {}
       }
     } catch (e) {
       dev.log('NotificationService Error: Failed to cancel for medicine $medicineId: $e');
     }
   }
 
-  /// Dismiss/cancel a specific scheduled notification by time slot
-  Future<void> cancelForTimeSlot(String timeStr) async {
+  /// Removes the alarm notification currently showing for [timeStr] (and any pending snooze
+  /// for it). Call this when the dose is taken, skipped or snoozed, then let
+  /// [rescheduleAll] restore future days. Because the visible alarm and the repeating
+  /// schedule share an ID on Android, the repeating schedule is also cleared here; the
+  /// app's dose-log listener rebuilds it immediately afterwards.
+  Future<void> dismissTimeSlot(String timeStr) async {
     if (kIsWeb) return;
-    final int id = getTimeSlotNotificationId(timeStr);
-    await _plugin.cancel(id);
-    dev.log('NotificationService: Cancelled alarm for time slot $timeStr (ID $id)');
+    final now = DateTime.now();
+    final ids = <int>{
+      getTimeSlotNotificationId(timeStr),
+      _dayNotificationId(timeStr, now),
+      _snoozeNotificationId(timeStr),
+      _legacySlotId(timeStr),
+    };
+    for (final id in ids) {
+      try {
+        await _plugin.cancel(id);
+      } catch (_) {}
+    }
   }
+
+  /// Compatibility alias.
+  Future<void> cancelForTimeSlot(String timeStr) => dismissTimeSlot(timeStr);
 
   /// Compatibility wrapper for cancelSpecificNotification
   Future<void> cancelSpecificNotification(String medicineId, String timeStr) async {
     if (kIsWeb) return;
-    await cancelForTimeSlot(timeStr);
-    final int legacyId = getNotificationId(medicineId, timeStr);
-    await _plugin.cancel(legacyId);
+    await dismissTimeSlot(timeStr);
+    await _plugin.cancel(getNotificationId(medicineId, timeStr));
   }
 
-  /// Schedule a snooze alarm notification for an entire time group in [minutes]
+  /// Schedules a one-off "snoozed" alarm for a whole time slot in [minutes].
+  /// Uses its own ID, so the daily alarm for this slot is never replaced.
   Future<void> scheduleSnoozeForTimeGroup(String scheduledTime, List<Medicine> medicines, int minutes) async {
     if (kIsWeb || medicines.isEmpty) return;
-    final int id = getTimeSlotNotificationId(scheduledTime);
-
-    final platformDetails = _buildAlarmNotificationDetails(ticker: 'Snooze Alarm');
-    final tz.TZDateTime scheduledDate = tz.TZDateTime.now(tz.local).add(Duration(minutes: minutes));
-
-    final String payload = jsonEncode({
-      'scheduledTime': scheduledTime,
-      'medicineId': medicines.first.id,
-      'medicineIds': medicines.map((m) => m.id).toList(),
-      'isSnooze': true,
-    });
-
-    final AppSettings settings = LocalStorageService().getSettings() ?? AppSettings();
-    final String lang = settings.language;
-    final int medCount = medicines.length;
-
-    final String title = lang == 'bn'
-        ? (medCount > 1 ? 'ওষুধের সময় (স্নুজ - $medCountটি ওষুধ)' : 'ওষুধ খাওয়ার সময়! (পুনরায়)')
-        : (medCount > 1 ? 'Medication Alarm (Snoozed - $medCount meds)' : 'Time to take your medicine! (Snoozed)');
-
-    final List<String> medSummaryList = medicines.map((m) => '${m.name} ${m.strength}'.trim()).toList();
-    final String body = lang == 'bn'
-        ? 'এখন খাওয়ার সময়: ${medSummaryList.join(", ")}'
-        : 'Due now: ${medSummaryList.join(", ")}';
-
-    try {
-      await _plugin.zonedSchedule(
-        id,
-        title,
-        body,
-        scheduledDate,
-        platformDetails,
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-        uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-        payload: payload,
-      );
-      dev.log('NotificationService: Scheduled snooze alarm $id for $scheduledTime in $minutes minutes');
-    } catch (e) {
-      dev.log('NotificationService Warning: Exact alarms snooze failed ($e). Falling back to inexact.');
-      try {
-        await _plugin.zonedSchedule(
-          id,
-          title,
-          body,
-          scheduledDate,
-          platformDetails,
-          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-          uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-          payload: payload,
-        );
-        dev.log('NotificationService: Scheduled fallback snooze alarm $id in $minutes minutes');
-      } catch (err) {
-        dev.log('NotificationService Error: Failed to schedule snooze alarm: $err');
-      }
-    }
+    final slot = _slotKey(scheduledTime);
+    final settings = LocalStorageService().getSettings() ?? AppSettings();
+    await _scheduleSlot(
+      id: _snoozeNotificationId(slot),
+      slot: slot,
+      medicines: medicines,
+      fireAt: tz.TZDateTime.now(tz.local).add(Duration(minutes: minutes)),
+      repeatDaily: false,
+      lang: settings.language,
+      isSnooze: true,
+    );
+    dev.log('NotificationService: Snooze set for $slot in $minutes minutes');
   }
 
   /// Compatibility wrapper for scheduleSnooze
@@ -411,44 +540,65 @@ class NotificationService {
   /// Debug test notification: schedules a test alarm to fire in 30 seconds
   Future<void> scheduleTestNotification() async {
     if (kIsWeb || !kDebugMode) return;
-
-    final String title = '🚨 টেস্ট ওষুধ অ্যালার্ম / Test Alarm';
-    final String body = 'আপনার Napa 500mg ওষুধ খাওয়ার সময় হয়েছে।';
-    const int testId = 999999;
-
-    final platformDetails = _buildAlarmNotificationDetails(ticker: title);
-    final tz.TZDateTime scheduledDate = tz.TZDateTime.now(tz.local).add(const Duration(seconds: 30));
-
-    final String payload = jsonEncode({
-      'medicineId': 'test_id',
-      'scheduledTime': '12:00 PM',
-    });
-
-    await _plugin.zonedSchedule(
-      testId,
-      title,
-      body,
-      scheduledDate,
-      platformDetails,
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-      payload: payload,
-    );
-    dev.log('NotificationService: Scheduled debug test alarm to fire at $scheduledDate');
+    await _scheduleTestAlarm(const Duration(seconds: 30));
   }
 
-  /// Foreground Precision Monitoring:
-  /// Monitors scheduled medicine times in the foreground so the alarm screen triggers
-  /// immediately when the minute arrives, without waiting for the user to tap the notification.
+  /// Schedules a clearly-labelled TEST alarm one minute from now so users and caregivers
+  /// can check that alarms ring on this phone (sound, lock screen, battery settings).
+  /// The test does not reference real medicines and tapping it never records a dose.
+  Future<DateTime> scheduleOneMinuteTestAlarm([List<Medicine> medicines = const []]) async {
+    return _scheduleTestAlarm(const Duration(minutes: 1));
+  }
+
+  static const int testAlarmId = 999999;
+
+  Future<DateTime> _scheduleTestAlarm(Duration delay) async {
+    final scheduledDate = tz.TZDateTime.now(tz.local).add(delay);
+    if (kIsWeb) return scheduledDate;
+    final settings = LocalStorageService().getSettings() ?? AppSettings();
+    final bn = settings.language == 'bn';
+    final details = _buildAlarmNotificationDetails(ticker: 'Test alarm');
+    final payload = jsonEncode({
+      'scheduledTime': formatTimeOfDay(scheduledDate.hour, scheduledDate.minute),
+      'medicineId': '',
+      'medicineIds': <String>[],
+      'isTest': true,
+    });
+    Future<void> schedule(AndroidScheduleMode mode) => _plugin.zonedSchedule(
+          testAlarmId,
+          bn ? 'পরীক্ষামূলক অ্যালার্ম' : 'Test alarm',
+          bn ? 'এটি শুধু একটি পরীক্ষা। আপনার অ্যালার্ম ঠিকমতো কাজ করছে।' : 'This is only a test. Your medicine alarms are working.',
+          scheduledDate,
+          details,
+          androidScheduleMode: mode,
+          uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+          payload: payload,
+        );
+    try {
+      await schedule(AndroidScheduleMode.exactAllowWhileIdle);
+    } catch (_) {
+      exactAlarmsUnavailable = true;
+      await schedule(AndroidScheduleMode.inexactAllowWhileIdle);
+    }
+    return scheduledDate;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Foreground monitoring
+  // ---------------------------------------------------------------------------
+
+  /// While the app is open, opens the reminder screen as soon as a dose time arrives,
+  /// without waiting for the user to tap the notification.
   Timer? _foregroundMonitoringTimer;
   List<Medicine> _monitoredMedicines = [];
+  List<DoseLog> _monitoredLogs = [];
   String? _lastTriggeredForegroundMinute;
 
-  void startForegroundAlarmMonitoring(List<Medicine> medicines) {
+  void startForegroundAlarmMonitoring(List<Medicine> medicines, {List<DoseLog> logs = const []}) {
     if (kIsWeb) return;
     _monitoredMedicines = medicines;
-    _foregroundMonitoringTimer?.cancel();
-    _foregroundMonitoringTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+    _monitoredLogs = logs;
+    _foregroundMonitoringTimer ??= Timer.periodic(const Duration(seconds: 5), (_) {
       _checkForegroundDueMedicines();
     });
   }
@@ -460,86 +610,26 @@ class NotificationService {
 
   void _checkForegroundDueMedicines() {
     if (_monitoredMedicines.isEmpty) return;
+    final settings = LocalStorageService().getSettings() ?? AppSettings();
+    if (!settings.appNotificationsEnabled) return;
 
     final now = DateTime.now();
-    final hour12 = now.hour == 0 ? 12 : (now.hour > 12 ? now.hour - 12 : now.hour);
-    final ampm = now.hour >= 12 ? 'PM' : 'AM';
-    final minuteStr = now.minute.toString().padLeft(2, '0');
-    final formattedNow = '$hour12:$minuteStr $ampm';
-    final currentMinuteKey = '${now.year}-${now.month}-${now.day} $formattedNow';
+    final currentMinuteKey = '${now.year}-${now.month}-${now.day} ${now.hour}:${now.minute}';
+    if (_lastTriggeredForegroundMinute == currentMinuteKey) return;
 
-    if (_lastTriggeredForegroundMinute == currentMinuteKey) {
-      return; // Already triggered for this exact minute
-    }
-
-    final grouped = groupMedicinesByTime(_monitoredMedicines);
+    final grouped = groupMedicinesByTime(_monitoredMedicines, day: now);
     for (final entry in grouped.entries) {
-      final scheduledTime = entry.key;
-      final parsed = _parseTime(scheduledTime);
-      if (parsed != null && parsed['hour'] == now.hour && parsed['minute'] == now.minute) {
-        _lastTriggeredForegroundMinute = currentMinuteKey;
-        dev.log('NotificationService: Foreground alarm triggered directly for time slot $scheduledTime');
-        
-        final String payload = jsonEncode({
-          'scheduledTime': scheduledTime,
-          'medicineId': entry.value.first.id,
-          'medicineIds': entry.value.map((m) => m.id).toList(),
-        });
-        selectNotificationPayload.add(payload);
-        break;
-      }
+      final t = parseTimeOfDay(entry.key);
+      if (t == null || t.hour != now.hour || t.minute != now.minute) continue;
+      final pending = entry.value.where((m) => !hasDoseLog(_monitoredLogs, m.id, entry.key, now)).toList();
+      if (pending.isEmpty) continue;
+      _lastTriggeredForegroundMinute = currentMinuteKey;
+      selectNotificationPayload.add(jsonEncode({
+        'scheduledTime': entry.key,
+        'medicineId': pending.first.id,
+        'medicineIds': pending.map((m) => m.id).toList(),
+      }));
+      break;
     }
-  }
-
-  /// Schedule a real 1-minute test alarm for fast deterministic testing
-  Future<DateTime> scheduleOneMinuteTestAlarm(List<Medicine> medicines) async {
-    final now = tz.TZDateTime.now(tz.local);
-    final scheduledDate = now.add(const Duration(minutes: 1));
-
-    final hour12 = scheduledDate.hour == 0 ? 12 : (scheduledDate.hour > 12 ? scheduledDate.hour - 12 : scheduledDate.hour);
-    final ampm = scheduledDate.hour >= 12 ? 'PM' : 'AM';
-    final minuteStr = scheduledDate.minute.toString().padLeft(2, '0');
-    final scheduledTimeStr = '$hour12:$minuteStr $ampm';
-
-    final targetMeds = medicines.isNotEmpty
-        ? medicines
-        : [
-            Medicine(
-              id: 'test_med_id',
-              name: 'Napa Extra',
-              strength: '500mg',
-              dose: '1',
-              form: MedicineForm.tablet,
-              mealRelation: 'After Meal',
-              instruction: 'হালকা গরম পানিতে খেতে পারেন',
-              times: [scheduledTimeStr],
-              status: 'Active',
-            ),
-          ];
-
-    final int id = getTimeSlotNotificationId(scheduledTimeStr);
-    final platformDetails = _buildAlarmNotificationDetails(ticker: 'Test Alarm ($scheduledTimeStr)');
-
-    final String payload = jsonEncode({
-      'scheduledTime': scheduledTimeStr,
-      'medicineId': targetMeds.first.id,
-      'medicineIds': targetMeds.map((m) => m.id).toList(),
-      'isTest': true,
-    });
-
-    await _plugin.zonedSchedule(
-      id,
-      '🚨 টেস্ট ওষুধ অ্যালার্ম (${targetMeds.length}টি ওষুধ)',
-      'এখন খাওয়ার সময়: ${targetMeds.map((m) => m.name).join(", ")}',
-      scheduledDate,
-      platformDetails,
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-      payload: payload,
-    );
-
-    dev.log('NotificationService: Scheduled 1-minute test alarm (ID: $id) for $scheduledTimeStr ($scheduledDate)');
-    return scheduledDate;
   }
 }
-

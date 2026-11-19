@@ -90,7 +90,7 @@ class LanguageSelectionScreen extends ConsumerWidget {
                   text: selectedLang == 'bn' ? 'এগিয়ে যান' : 'Continue',
                   icon: Icons.arrow_forward_rounded,
                   onPressed: () {
-                    context.go('/role-selection');
+                    context.go('/onboarding');
                   },
                 ),
               ),

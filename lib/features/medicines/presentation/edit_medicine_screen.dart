@@ -6,6 +6,8 @@ import '../../../core/models/mock_models.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../shared/widgets/app_primary_button.dart';
 import '../../../shared/widgets/fade_slide_in.dart';
+import '../../../core/utils/time_utils.dart';
+import 'widgets/medicine_form_parts.dart';
 
 class EditMedicineScreen extends ConsumerStatefulWidget {
   final Medicine? medicine;
@@ -30,25 +32,33 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
   late String _selectedMealRelation;
   late List<String> _reminderTimes;
   late Medicine _targetMedicine;
+  bool _missing = false;
+  DateTime? _endDate;
 
   @override
   void initState() {
     super.initState();
     final medList = ref.read(medicinesProvider);
-    _targetMedicine = widget.medicine ?? ref.read(selectedMedicineProvider) ?? (medList.isNotEmpty ? medList.first : Medicine(
-      id: '0',
-      name: '',
-      strength: '',
-      form: MedicineForm.tablet,
-      dose: '1 Tablet',
-      times: ['08:00 AM'],
-      mealRelation: 'After Meal',
-      instruction: '',
-    ));
+    // Edit only the medicine that was actually selected. (Previously this fell back to the
+    // first medicine in the list, or a blank placeholder that was then saved as a new entry.)
+    final target = widget.medicine ?? ref.read(selectedMedicineProvider);
+    _missing = target == null || !medList.any((m) => m.id == target.id);
+    _targetMedicine = target ??
+        Medicine(
+          id: '',
+          name: '',
+          strength: '',
+          form: MedicineForm.tablet,
+          dose: '',
+          times: const [],
+          mealRelation: 'None',
+          instruction: '',
+        );
+    _endDate = _targetMedicine.endDate;
 
     _nameController = TextEditingController(text: _targetMedicine.name);
     _strengthController = TextEditingController(text: _targetMedicine.strength);
-    _doseController = TextEditingController(text: _targetMedicine.dose);
+    _doseController = TextEditingController(text: doseFieldText(_targetMedicine.dose, _targetMedicine.form));
     _instructionController = TextEditingController(text: _targetMedicine.instruction);
     _selectedForm = _targetMedicine.form;
     _selectedMealRelation = _targetMedicine.mealRelation;
@@ -71,17 +81,73 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
     );
     if (time != null) {
       setState(() {
-        _reminderTimes.add(time.format(context));
+        final formatted = formatTimeOfDay(time.hour, time.minute);
+        if (!_reminderTimes.any((t) => sameTimeOfDay(t, formatted))) {
+          _reminderTimes.add(formatted);
+          _reminderTimes.sort((a, b) => minutesOfDay(a).compareTo(minutesOfDay(b)));
+        }
       });
     }
+  }
+
+  /// Tapping a time chip: pick a new time for it.
+  Future<void> _editReminderTime(String old) async {
+    final m = minutesOfDay(old);
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: m < 0 ? TimeOfDay.now() : TimeOfDay(hour: m ~/ 60, minute: m % 60),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      final formatted = formatTimeOfDay(picked.hour, picked.minute);
+      _reminderTimes = [
+        ..._reminderTimes.where((t) => t != old && !sameTimeOfDay(t, formatted)),
+        formatted,
+      ]..sort((a, b) => minutesOfDay(a).compareTo(minutesOfDay(b)));
+    });
+  }
+
+  Future<void> _selectEndDate() async {
+    final start = _targetMedicine.startDate ?? DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _endDate ?? DateTime.now().add(const Duration(days: 7)),
+      firstDate: start.isBefore(DateTime.now()) ? start : DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
+    );
+    if (picked != null) setState(() => _endDate = picked);
   }
 
   @override
   Widget build(BuildContext context) {
     final settings = ref.watch(appSettingsProvider);
     final lang = settings.language;
+    final bn = lang == 'bn';
 
-    final title = lang == 'bn' ? 'ওষুধ পরিমার্জন করুন' : 'Edit Medicine';
+    final title = bn ? 'ওষুধ পরিমার্জন করুন' : 'Edit Medicine';
+
+    if (_missing) {
+      return Scaffold(
+        appBar: AppBar(title: Text(lang == 'bn' ? 'ওষুধ পাওয়া যায়নি' : 'Medicine not found')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Text(
+              lang == 'bn'
+                  ? 'এই ওষুধটি আর তালিকায় নেই। ওষুধের তালিকা থেকে আবার বেছে নিন।'
+                  : 'This medicine is no longer in your list. Please choose it again from your medicines.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 18.0),
+            ),
+          ),
+        ),
+      );
+    }
+
+    // Same compact layout as Add Medicine: fits on one screen on normal phones.
+    final stacked = useStackedFormLayout(context);
+    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    final ended = _endDate != null && _endDate!.isBefore(today);
 
     return Scaffold(
       appBar: AppBar(
@@ -92,294 +158,147 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
         scrolledUnderElevation: 0,
       ),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Section: Basic Info
-                FadeSlideIn(
-                  child: _buildSectionHeader(lang == 'bn' ? 'ওষুধের তথ্য' : 'Basic Info'),
-                ),
-                const SizedBox(height: 12.0),
-
-                // Name
-                FadeSlideIn(
-                  delay: const Duration(milliseconds: 100),
-                  child: TextFormField(
-                    controller: _nameController,
-                    decoration: InputDecoration(
-                      labelText: lang == 'bn' ? 'ওষুধের নাম' : 'Medicine Name',
-                      prefixIcon: const Icon(Icons.medication_rounded, color: AppColors.primary),
-                    ),
-                    validator: (value) => value == null || value.isEmpty ? 'Required' : null,
-                  ),
-                ),
-                const SizedBox(height: 16.0),
-
-                // Strength
-                FadeSlideIn(
-                  delay: const Duration(milliseconds: 150),
-                  child: TextFormField(
-                    controller: _strengthController,
-                    decoration: InputDecoration(
-                      labelText: lang == 'bn' ? 'ওষুধের মাত্রা/পাওয়ার' : 'Strength (e.g. 500mg)',
-                      prefixIcon: const Icon(Icons.health_and_safety_rounded, color: AppColors.primary),
-                    ),
-                    validator: (value) => value == null || value.isEmpty ? 'Required' : null,
-                  ),
-                ),
-                const SizedBox(height: 16.0),
-
-                // Form selection
-                FadeSlideIn(
-                  delay: const Duration(milliseconds: 200),
-                  child: Text(
-                    lang == 'bn' ? 'ওষুধের ধরন' : 'Medicine Form',
-                    style: const TextStyle(fontSize: 15.0, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
-                  ),
-                ),
-                const SizedBox(height: 8.0),
-                FadeSlideIn(
-                  delay: const Duration(milliseconds: 250),
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: MedicineForm.values.map((form) {
-                        final isSelected = _selectedForm == form;
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 8.0),
-                          child: GestureDetector(
-                            onTap: () {
-                              setState(() {
-                                _selectedForm = form;
-                              });
-                            },
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 150),
-                              padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 8.0),
-                              decoration: BoxDecoration(
-                                color: isSelected ? AppColors.primary : Colors.white,
-                                borderRadius: BorderRadius.circular(12.0),
-                                border: Border.all(
-                                  color: isSelected ? AppColors.primary : AppColors.border,
-                                  width: 1.0,
-                                ),
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(form.icon, size: 16, color: isSelected ? Colors.white : AppColors.primary),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    form.displayName,
-                                    style: TextStyle(
-                                      color: isSelected ? Colors.white : AppColors.textPrimary,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 13.0,
-                                    ),
-                                  ),
-                                ],
-                              ),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(20.0, 4.0, 20.0, 8.0),
+                  child: FadeSlideIn(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        TextFormField(
+                          controller: _nameController,
+                          decoration: compactFieldDecoration(bn ? 'ওষুধের নাম' : 'Medicine name',
+                              icon: Icons.medication_rounded),
+                          validator: requiredField,
+                        ),
+                        const SizedBox(height: kFormGap),
+                        pairedFields(
+                          stacked,
+                          TextFormField(
+                            controller: _strengthController,
+                            decoration: compactFieldDecoration(bn ? 'মাত্রা/পাওয়ার' : 'Strength', hint: 'e.g. 500mg'),
+                            validator: requiredField,
+                          ),
+                          DoseField(controller: _doseController, form: _selectedForm, bn: bn),
+                        ),
+                        const SizedBox(height: kFormGap),
+                        MedicineFormPicker(
+                          selected: _selectedForm,
+                          onChanged: (f) => setState(() {
+                            _doseController.text = doseFieldAfterFormChange(_doseController.text, _selectedForm, f);
+                            _selectedForm = f;
+                          }),
+                          bn: bn,
+                          stacked: stacked,
+                        ),
+                        const SizedBox(height: kFormGap),
+                        pairedFields(
+                          stacked,
+                          MealRelationDropdown(
+                            value: _selectedMealRelation,
+                            onChanged: (v) => setState(() => _selectedMealRelation = v),
+                            bn: bn,
+                          ),
+                          OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(0, 52.0),
+                              padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 8.0),
+                            ),
+                            icon: Icon(_endDate == null ? Icons.all_inclusive_rounded : Icons.event_rounded, size: 20),
+                            label: Text(_endDate == null
+                                ? (bn ? 'শেষ: চলতে থাকবে' : 'Ends: never')
+                                : '${bn ? 'শেষ' : 'End'} ${shortDate(_endDate!)}'),
+                            onPressed: _selectEndDate,
+                          ),
+                        ),
+                        if (ended)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8.0),
+                            child: Text(
+                              bn
+                                  ? 'এই ওষুধের শেষ তারিখ পার হয়ে গেছে, তাই অ্যালার্ম বাজছে না।'
+                                  : 'This end date has passed, so no alarms ring for this medicine.',
+                              style: const TextStyle(color: AppColors.error, fontSize: 15.0, fontWeight: FontWeight.w600),
                             ),
                           ),
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 24.0),
-
-                // Section: Schedule
-                FadeSlideIn(
-                  delay: const Duration(milliseconds: 300),
-                  child: _buildSectionHeader(lang == 'bn' ? 'ওষুধ খাওয়ার সূচি' : 'Schedule & Frequency'),
-                ),
-                const SizedBox(height: 12.0),
-
-                // Dose amount
-                FadeSlideIn(
-                  delay: const Duration(milliseconds: 350),
-                  child: TextFormField(
-                    controller: _doseController,
-                    decoration: InputDecoration(
-                      labelText: lang == 'bn' ? 'ওষুধের পরিমাণ' : 'Dose (e.g. 1 Tablet)',
-                      prefixIcon: const Icon(Icons.tag_rounded, color: AppColors.primary),
-                    ),
-                    validator: (value) => value == null || value.isEmpty ? 'Required' : null,
-                  ),
-                ),
-                const SizedBox(height: 16.0),
-
-                // Meal relation
-                FadeSlideIn(
-                  delay: const Duration(milliseconds: 400),
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _selectedMealRelation,
-                    decoration: InputDecoration(
-                      labelText: lang == 'bn' ? 'খাবারের সাথে সম্পর্ক' : 'Meal Relation',
-                      prefixIcon: const Icon(Icons.restaurant_rounded, color: AppColors.primary),
-                    ),
-                    items: ['Before Meal', 'After Meal', 'With Meal', 'None']
-                        .map((val) => DropdownMenuItem(
-                              value: val,
-                              child: Text(val),
-                            ))
-                        .toList(),
-                    onChanged: (val) {
-                      if (val != null) {
-                        setState(() {
-                          _selectedMealRelation = val;
-                        });
-                      }
-                    },
-                  ),
-                ),
-                const SizedBox(height: 20.0),
-
-                // Reminder times list
-                FadeSlideIn(
-                  delay: const Duration(milliseconds: 450),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        lang == 'bn' ? 'রিমাইন্ডারের সময়সমূহ' : 'Reminder Times',
-                        style: const TextStyle(fontSize: 15.0, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
-                      ),
-                      GestureDetector(
-                        onTap: _addReminderTime,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: AppColors.primaryLight,
-                            borderRadius: BorderRadius.circular(10),
+                        if (_endDate != null)
+                          TextButton.icon(
+                            icon: const Icon(Icons.all_inclusive_rounded),
+                            label: Text(bn ? 'শেষ তারিখ সরান (চলতে থাকবে)' : 'Remove end date (keep going)'),
+                            onPressed: () => setState(() => _endDate = null),
                           ),
-                          child: Row(
-                            children: [
-                              const Icon(Icons.add_alarm_rounded, color: AppColors.primary, size: 16),
-                              const SizedBox(width: 4),
-                              Text(
-                                lang == 'bn' ? 'সময় যোগ করুন' : 'Add Time',
-                                style: const TextStyle(color: AppColors.primaryDark, fontWeight: FontWeight.bold, fontSize: 12),
-                              )
-                            ],
-                          ),
-                        ),
-                      )
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 10),
-                FadeSlideIn(
-                  delay: const Duration(milliseconds: 500),
-                  child: Wrap(
-                    spacing: 8.0,
-                    runSpacing: 8.0,
-                    children: _reminderTimes.map((time) {
-                      return Chip(
-                        label: Text(time, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.textPrimary)),
-                        backgroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10.0),
-                          side: const BorderSide(color: AppColors.border),
-                        ),
-                        deleteIcon: const Icon(Icons.close_rounded, size: 14, color: AppColors.error),
-                        onDeleted: () {
-                          setState(() {
-                            _reminderTimes.remove(time);
-                          });
-                        },
-                      );
-                    }).toList(),
-                  ),
-                ),
-                const SizedBox(height: 24.0),
-
-                // Section: Instructions
-                FadeSlideIn(
-                  delay: const Duration(milliseconds: 550),
-                  child: _buildSectionHeader(lang == 'bn' ? 'বিশেষ নির্দেশনা' : 'Instructions'),
-                ),
-                const SizedBox(height: 12.0),
-
-                // Instructions
-                FadeSlideIn(
-                  delay: const Duration(milliseconds: 600),
-                  child: TextFormField(
-                    controller: _instructionController,
-                    maxLines: 2,
-                    decoration: InputDecoration(
-                      labelText: lang == 'bn' ? 'বিশেষ নির্দেশনা' : 'Special Instructions',
-                      prefixIcon: const Icon(Icons.note_alt_rounded, color: AppColors.primary),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 40.0),
-
-                FadeSlideIn(
-                  delay: const Duration(milliseconds: 650),
-                  child: AppPrimaryButton(
-                    text: lang == 'bn' ? 'পরিবর্তন সংরক্ষণ করুন' : 'Save Changes',
-                    icon: Icons.save_rounded,
-                    onPressed: () {
-                      if (_formKey.currentState!.validate()) {
-                        final updatedMed = _targetMedicine.copyWith(
-                          name: _nameController.text,
-                          strength: _strengthController.text,
-                          form: _selectedForm,
-                          dose: _doseController.text,
+                        const SizedBox(height: kFormGap),
+                        ReminderTimesRow(
                           times: _reminderTimes,
-                          mealRelation: _selectedMealRelation,
-                          instruction: _instructionController.text,
-                        );
-
-                        ref.read(medicinesProvider.notifier).updateMedicine(updatedMed);
-
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(lang == 'bn' ? 'পরিবর্তন সংরক্ষণ করা হয়েছে' : 'Changes saved successfully!'),
-                            backgroundColor: AppColors.success,
-                          ),
-                        );
-
-                        context.go('/home');
-                      }
-                    },
+                          onRemove: (t) => setState(() => _reminderTimes.remove(t)),
+                          onAdd: _addReminderTime,
+                          onEdit: _editReminderTime,
+                          bn: bn,
+                        ),
+                        const SizedBox(height: kFormGap),
+                        TextFormField(
+                          controller: _instructionController,
+                          decoration: compactFieldDecoration(
+                              bn ? 'বিশেষ নির্দেশনা (ঐচ্ছিক)' : 'Special instructions (optional)',
+                              hint: 'e.g. Take with warm water',
+                              icon: Icons.note_alt_rounded),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                const SizedBox(height: 20.0),
-              ],
-            ),
+              ),
+              // Always visible, outside the scrolling area.
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20.0, 4.0, 20.0, 12.0),
+                child: AppPrimaryButton(
+                  text: bn ? 'পরিবর্তন সংরক্ষণ করুন' : 'Save Changes',
+                  icon: Icons.save_rounded,
+                  onPressed: () => _save(lang),
+                ),
+              ),
+            ],
           ),
         ),
       ),
     );
   }
 
-  Widget _buildSectionHeader(String title) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: const TextStyle(
-            fontSize: 16.0,
-            fontWeight: FontWeight.bold,
-            color: AppColors.primaryDark,
-          ),
+  void _save(String lang) {
+    if (!_formKey.currentState!.validate()) return;
+    if (_reminderTimes.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(lang == 'bn' ? 'কমপক্ষে একটি অ্যালার্মের সময় দিন' : 'Add at least one reminder time'),
+          backgroundColor: AppColors.error,
         ),
-        const SizedBox(height: 4.0),
-        Container(
-          width: 32,
-          height: 3,
-          decoration: BoxDecoration(
-            color: AppColors.primary,
-            borderRadius: BorderRadius.circular(1.5),
-          ),
-        ),
-      ],
+      );
+      return;
+    }
+    final updatedMed = _targetMedicine.copyWith(
+      name: _nameController.text.trim(),
+      strength: _strengthController.text.trim(),
+      form: _selectedForm,
+      dose: doseForSave(_doseController.text, _selectedForm),
+      times: _reminderTimes,
+      mealRelation: _selectedMealRelation,
+      instruction: _instructionController.text.trim(),
+      endDate: _endDate,
+      clearEndDate: _endDate == null,
     );
+
+    ref.read(medicinesProvider.notifier).updateMedicine(updatedMed);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(lang == 'bn' ? 'পরিবর্তন সংরক্ষণ করা হয়েছে' : 'Changes saved successfully!'),
+        backgroundColor: AppColors.success,
+      ),
+    );
+    context.go('/home');
   }
 }

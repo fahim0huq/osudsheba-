@@ -5,6 +5,7 @@ import 'package:fl_chart/fl_chart.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../shared/widgets/app_primary_button.dart';
+import '../../../shared/widgets/app_secondary_button.dart';
 
 import '../../../shared/widgets/fade_slide_in.dart';
 import '../../../shared/widgets/empty_state.dart';
@@ -191,7 +192,7 @@ class AdherenceDashboardScreen extends ConsumerWidget {
                                       padding: const EdgeInsets.only(top: 8.0),
                                       child: Text(
                                         formatDayName(date),
-                                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.textSecondary),
+                                        style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold, color: AppColors.textSecondary),
                                       ),
                                     );
                                   }
@@ -251,6 +252,15 @@ class AdherenceDashboardScreen extends ConsumerWidget {
                   text: lang == 'bn' ? 'বিস্তারিত হিস্টরি দেখুন' : 'View History',
                   icon: Icons.history_rounded,
                   onPressed: () => context.push('/adherence-history'),
+                ),
+              ),
+              const SizedBox(height: 12.0),
+              FadeSlideIn(
+                delay: const Duration(milliseconds: 400),
+                child: AppSecondaryButton(
+                  text: lang == 'bn' ? 'ওষুধ খাওয়ার পরামর্শ' : 'Medicine Tips',
+                  icon: Icons.lightbulb_outline_rounded,
+                  onPressed: () => context.push('/adherence-insights'),
                 ),
               ),
               const SizedBox(height: 20.0),

@@ -25,7 +25,7 @@ class AdherenceInsightsScreen extends ConsumerWidget {
       patientProfile: patientProfile,
     );
 
-    final title = lang == 'bn' ? 'ব্যবহার বিশ্লেষণ ও এআই টিপস' : 'AI Behavioral Insights';
+    final title = lang == 'bn' ? 'ওষুধ খাওয়ার পরামর্শ' : 'Medicine Tips';
 
     return Scaffold(
       appBar: AppBar(
@@ -43,7 +43,7 @@ class AdherenceInsightsScreen extends ConsumerWidget {
             children: [
               FadeSlideIn(
                 child: Text(
-                  lang == 'bn' ? 'এআই আচরণগত টিপস' : 'AI Suggestions',
+                  lang == 'bn' ? 'আপনার জন্য পরামর্শ' : 'Tips for you',
                   style: Theme.of(context).textTheme.displaySmall?.copyWith(
                         fontSize: 22.0,
                         fontWeight: FontWeight.bold,
@@ -56,8 +56,8 @@ class AdherenceInsightsScreen extends ConsumerWidget {
                 delay: const Duration(milliseconds: 100),
                 child: Text(
                   lang == 'bn'
-                      ? 'আপনার ওষুধ খাওয়ার আচরণ বিশ্লেষণ করে এআই নিচের পরামর্শগুলো প্রদান করছে।'
-                      : 'Based on your local adherence behavior, the AI suggests the following changes.',
+                      ? 'এই পরামর্শগুলো এই ফোনে রেকর্ড করা ডোজ থেকে কিছু সহজ নিয়মে তৈরি।'
+                      : 'These tips come from simple rules applied to the doses recorded on this phone.',
                   style: const TextStyle(color: AppColors.textSecondary, fontSize: 14.5, height: 1.3),
                 ),
               ),
@@ -70,7 +70,7 @@ class AdherenceInsightsScreen extends ConsumerWidget {
                     child: Padding(
                       padding: const EdgeInsets.symmetric(vertical: 40.0),
                       child: Text(
-                        lang == 'bn' ? 'কোনো নতুন এআই পরামর্শ নেই।' : 'No AI suggestions currently available.',
+                        lang == 'bn' ? 'এখন কোনো নতুন পরামর্শ নেই।' : 'No tips right now.',
                         style: const TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.bold),
                       ),
                     ),
@@ -121,9 +121,9 @@ class AdherenceInsightsScreen extends ConsumerWidget {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    lang == 'bn' ? 'এআই পরামর্শ #${index + 1}' : 'AI Suggestion #${index + 1}',
+                                    lang == 'bn' ? 'পরামর্শ #${index + 1}' : 'Tip #${index + 1}',
                                     style: const TextStyle(
-                                      fontSize: 12.0,
+                                      fontSize: 13.5,
                                       fontWeight: FontWeight.bold,
                                       color: AppColors.primaryDark,
                                     ),

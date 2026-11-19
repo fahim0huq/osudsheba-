@@ -11,109 +11,33 @@ abstract class AuthService {
   Future<void> sendPhoneVerification(String phone);
   Future<void> verifyPhoneOtp(String otp);
   Future<void> signOut();
+
+  /// Emails a password-reset link. Firebase does not reveal whether the email has an
+  /// account, so a success only means the request was accepted.
+  Future<void> sendPasswordReset(String email);
   Stream<AuthUser?> get authStateChanges;
   AuthUser? get currentUser;
   Future<String?> getIdToken();
+
+  /// How the current user signs in: 'password', 'google.com', 'phone', or null.
+  String? get signInMethod;
+
+  /// Firebase only allows deleting an account shortly after signing in.
+  bool get hasRecentSignIn;
+  Future<void> reauthenticateWithPassword(String password);
+  Future<void> reauthenticateWithGoogle();
+
+  /// Permanently deletes the signed-in account.
+  /// Throws [RecentSignInRequiredException] if the user must sign in again first.
+  Future<void> deleteCurrentUser();
 }
 
-class MockAuthService implements AuthService {
-  AuthUser? _currentUser;
-  final List<StreamController<AuthUser?>> _controllers = [];
+/// Firebase refused an account change because the last sign-in is too old.
+class RecentSignInRequiredException implements Exception {
+  const RecentSignInRequiredException();
 
   @override
-  AuthUser? get currentUser => _currentUser;
-
-  @override
-  Stream<AuthUser?> get authStateChanges {
-    final controller = StreamController<AuthUser?>();
-    _controllers.add(controller);
-    
-    // Immediately emit current user to new listener
-    controller.add(_currentUser);
-    
-    controller.onCancel = () {
-      _controllers.remove(controller);
-      controller.close();
-    };
-    
-    return controller.stream;
-  }
-
-  void _updateUser(AuthUser? user) {
-    _currentUser = user;
-    for (final controller in _controllers) {
-      if (!controller.isClosed) {
-        controller.add(user);
-      }
-    }
-  }
-
-  @override
-  Future<void> signInWithEmail(String email, String password) async {
-    await Future.delayed(const Duration(milliseconds: 1000));
-    if (!email.contains('@') || email.length < 5) {
-      throw Exception('Invalid email address format');
-    }
-    if (password.length < 6) {
-      throw Exception('Password must be at least 6 characters');
-    }
-    // Simulate authentication
-    final user = AuthUser(
-      uid: 'mock_email_${email.hashCode}',
-      email: email,
-      displayName: email.split('@').first,
-    );
-    _updateUser(user);
-  }
-
-  @override
-  Future<void> signUpWithEmail(String email, String password) async {
-    await Future.delayed(const Duration(milliseconds: 1000));
-    if (!email.contains('@') || email.length < 5) {
-      throw Exception('Invalid email address format');
-    }
-    if (password.length < 6) {
-      throw Exception('Password must be at least 6 characters');
-    }
-    final user = AuthUser(
-      uid: 'mock_email_${email.hashCode}',
-      email: email,
-      displayName: email.split('@').first,
-    );
-    _updateUser(user);
-  }
-
-  @override
-  Future<void> signInWithGoogle() async {
-    await Future.delayed(const Duration(milliseconds: 1200));
-    final user = AuthUser(
-      uid: 'mock_google_12345',
-      email: 'google.user@example.com',
-      displayName: 'Google User',
-      photoUrl: 'https://lh3.googleusercontent.com/a/default-user',
-    );
-    _updateUser(user);
-  }
-
-  @override
-  Future<void> sendPhoneVerification(String phone) async {
-    throw UnimplementedError('Mock phone authentication is disabled.');
-  }
-
-  @override
-  Future<void> verifyPhoneOtp(String otp) async {
-    throw UnimplementedError('Mock phone authentication bypass is disabled.');
-  }
-
-  @override
-  Future<void> signOut() async {
-    _updateUser(null);
-  }
-
-  @override
-  Future<String?> getIdToken() async {
-    return _currentUser != null ? 'mock_token_for_${_currentUser!.uid}' : null;
-  }
+  String toString() => 'Exception: Please sign in again, then try once more.';
 }
 
 class FirebaseAuthService implements AuthService {
@@ -282,6 +206,72 @@ class FirebaseAuthService implements AuthService {
     } catch (e) {
       throw _wrapError(e);
     }
+  }
+
+  @override
+  String? get signInMethod {
+    final providers = _firebaseAuth.currentUser?.providerData.map((p) => p.providerId).toList() ?? [];
+    for (final id in const ['password', 'google.com', 'phone']) {
+      if (providers.contains(id)) return id;
+    }
+    return null;
+  }
+
+  @override
+  bool get hasRecentSignIn {
+    final last = _firebaseAuth.currentUser?.metadata.lastSignInTime;
+    // Firebase's own limit is about 5 minutes; stay a little inside it.
+    return last != null && DateTime.now().difference(last) < const Duration(minutes: 4);
+  }
+
+  @override
+  Future<void> reauthenticateWithPassword(String password) async {
+    final user = _firebaseAuth.currentUser;
+    if (user == null || user.email == null) throw Exception('Not signed in.');
+    try {
+      await user.reauthenticateWithCredential(
+        EmailAuthProvider.credential(email: user.email!, password: password),
+      );
+    } catch (e) {
+      throw _wrapError(e);
+    }
+  }
+
+  @override
+  Future<void> reauthenticateWithGoogle() async {
+    final user = _firebaseAuth.currentUser;
+    if (user == null) throw Exception('Not signed in.');
+    try {
+      final googleUser = await _googleSignIn.authenticate();
+      final credential = GoogleAuthProvider.credential(idToken: googleUser.authentication.idToken);
+      await user.reauthenticateWithCredential(credential);
+    } catch (e) {
+      throw _wrapError(e);
+    }
+  }
+
+  @override
+  Future<void> sendPasswordReset(String email) async {
+    try {
+      await _firebaseAuth.sendPasswordResetEmail(email: email.trim());
+    } catch (e) {
+      throw _wrapError(e);
+    }
+  }
+
+  @override
+  Future<void> deleteCurrentUser() async {
+    final user = _firebaseAuth.currentUser;
+    if (user == null) return;
+    try {
+      await user.delete();
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'requires-recent-login') throw const RecentSignInRequiredException();
+      throw _wrapError(e);
+    }
+    try {
+      await _googleSignIn.signOut();
+    } catch (_) {}
   }
 
   Exception _wrapError(dynamic e) {

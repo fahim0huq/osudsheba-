@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../core/services/scan/prescription_text_parser.dart';
+import '../features/prescription/presentation/photo_entry_screen.dart';
+import '../core/constants/app_features.dart';
 import '../core/models/mock_models.dart';
+import '../core/services/mock_data_service.dart';
 import '../core/services/auth_service.dart';
 import '../core/providers/subscription_provider.dart';
 
@@ -23,7 +27,6 @@ import '../features/medicines/presentation/edit_medicine_screen.dart';
 import '../features/medicines/presentation/dose_action_screen.dart';
 
 import '../features/prescription/presentation/ai_prescription_review_screen.dart';
-import '../features/prescription/presentation/manual_prescription_entry_screen.dart';
 import '../features/reminders/presentation/reminder_alert_screen.dart';
 import '../features/reminders/presentation/reminder_settings_screen.dart';
 
@@ -33,10 +36,13 @@ import '../features/adherence/presentation/adherence_insights_screen.dart';
 import '../features/caregiver/presentation/caregiver_invite_screen.dart';
 import '../features/caregiver/presentation/caregiver_patient_detail_screen.dart';
 import '../features/caregiver/presentation/caregiver_alerts_screen.dart';
+import '../features/family/presentation/invite_family_screen.dart';
+import '../features/family/presentation/join_care_screen.dart';
+import '../features/family/presentation/care_person_screen.dart';
+import '../core/services/family_service.dart';
 import '../features/settings/presentation/settings_screen.dart';
 import '../features/settings/presentation/privacy_screen.dart';
 import '../features/settings/presentation/language_settings_screen.dart';
-import '../features/settings/presentation/notification_settings_screen.dart';
 import '../features/onboarding/presentation/app_startup_gate.dart';
 
 final GoRouter appRouter = GoRouter(
@@ -55,7 +61,6 @@ final GoRouter appRouter = GoRouter(
         '/language-selection',
         '/role-selection',
         '/login',
-        '/signup',
         '/phone-verification',
         '/forgot-password',
         '/subscription',
@@ -65,6 +70,10 @@ final GoRouter appRouter = GoRouter(
       // If route is public, allow
       if (publicRoutes.contains(matched)) {
         if (matched == '/subscription' && authUser != null && isEntitled) {
+          final profile = container.read(userProfileProvider);
+          if (effectiveRole(profile.role) == 'Caregiver') {
+            return '/caregiver';
+          }
           return '/home';
         }
         return null;
@@ -112,10 +121,6 @@ final GoRouter appRouter = GoRouter(
       builder: (context, state) => const LoginScreen(isSignUp: false),
     ),
     GoRoute(
-      path: '/signup',
-      builder: (context, state) => const LoginScreen(isSignUp: true),
-    ),
-    GoRoute(
       path: '/phone-verification',
       builder: (context, state) => const PhoneVerificationScreen(),
     ),
@@ -147,23 +152,24 @@ final GoRouter appRouter = GoRouter(
     GoRoute(
       path: '/medicine-detail',
       builder: (context, state) {
-        final med = state.extra as Medicine?;
+        final med = state.extra is Medicine ? state.extra as Medicine : null;
         return MedicineDetailScreen(medicine: med);
       },
     ),
     GoRoute(
       path: '/edit-medicine',
       builder: (context, state) {
-        final med = state.extra as Medicine?;
+        final med = state.extra is Medicine ? state.extra as Medicine : null;
         return EditMedicineScreen(medicine: med);
       },
     ),
     GoRoute(
       path: '/dose-action',
       builder: (context, state) {
-        final Map<String, dynamic> args = state.extra as Map<String, dynamic>;
+        // extra is lost on app restore / deep links; fall back safely instead of crashing.
+        final args = state.extra is Map<String, dynamic> ? state.extra as Map<String, dynamic> : const <String, dynamic>{};
         final med = args['medicine'] as Medicine?;
-        final time = args['scheduledTime'] as String;
+        final time = args['scheduledTime'] as String? ?? '';
         return DoseActionScreen(medicine: med, scheduledTime: time);
       },
     ),
@@ -174,24 +180,25 @@ final GoRouter appRouter = GoRouter(
     GoRoute(
       path: '/ai-prescription-review',
       builder: (context, state) {
-        final Map<String, dynamic>? args = state.extra as Map<String, dynamic>?;
+        final Map<String, dynamic>? args = state.extra is Map<String, dynamic> ? state.extra as Map<String, dynamic> : null;
         return AiPrescriptionReviewScreen(
           ocrText: args?['ocrText'] as String?,
-          draftMedicines: args?['draftMedicines'] as List<Medicine>?,
-          isFallback: args?['isFallback'] as bool? ?? false,
+          drafts: args?['drafts'] as List<ScanDraft>?,
+          source: args?['source'] as String? ?? 'scan',
         );
       },
     ),
     GoRoute(
-      path: '/manual-prescription-entry',
-      builder: (context, state) => const ManualPrescriptionEntryScreen(),
+      path: '/prescription-photo-entry',
+      builder: (context, state) => PhotoEntryScreen(imagePath: state.extra as String? ?? ''),
     ),
     GoRoute(
       path: '/reminder-alert',
       builder: (context, state) {
         final medicineId = state.uri.queryParameters['medicineId'] ?? '';
         final scheduledTime = state.uri.queryParameters['scheduledTime'] ?? '';
-        return ReminderAlertScreen(medicineId: medicineId, scheduledTime: scheduledTime);
+        final isTest = state.uri.queryParameters['test'] == '1';
+        return ReminderAlertScreen(medicineId: medicineId, scheduledTime: scheduledTime, isTest: isTest);
       },
     ),
     GoRoute(
@@ -226,6 +233,20 @@ final GoRouter appRouter = GoRouter(
       path: '/caregiver-alerts',
       builder: (context, state) => const CaregiverAlertsScreen(),
     ),
+    // Family sharing (docs/FAMILY_SHARING_PLAN.md)
+    GoRoute(
+      path: '/family/invite',
+      builder: (context, state) => const InviteFamilyScreen(),
+    ),
+    GoRoute(
+      path: '/family/join',
+      builder: (context, state) => const JoinCareScreen(),
+    ),
+    GoRoute(
+      path: '/family/person',
+      redirect: (context, state) => state.extra is CaredPerson ? null : '/caregiver',
+      builder: (context, state) => CarePersonScreen(person: state.extra! as CaredPerson),
+    ),
     GoRoute(
       path: '/settings',
       builder: (context, state) => const SettingsScreen(),
@@ -239,8 +260,9 @@ final GoRouter appRouter = GoRouter(
       builder: (context, state) => const LanguageSettingsScreen(),
     ),
     GoRoute(
+      // Kept for old links; the reminder screen now holds all working alarm settings.
       path: '/notification-settings',
-      builder: (context, state) => const NotificationSettingsScreen(),
+      builder: (context, state) => const ReminderSettingsScreen(),
     ),
   ],
 );

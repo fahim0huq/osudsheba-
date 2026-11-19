@@ -1,12 +1,17 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../core/services/notification_service.dart';
-import '../../../shared/widgets/app_primary_button.dart';
-import '../../../shared/widgets/fade_slide_in.dart';
+import '../../../shared/widgets/confirm_dialog.dart';
 
+/// Reminder settings.
+///
+/// Only settings that actually do something are shown. The previous screens also offered
+/// "SMS reminders", "Daily summary SMS", "Missed-dose SMS to family" and a ringtone picker;
+/// none of these were implemented (no SMS is ever sent and the tone was never used), so
+/// they gave users and caregivers false reassurance and have been removed.
 class ReminderSettingsScreen extends ConsumerStatefulWidget {
   const ReminderSettingsScreen({super.key});
 
@@ -15,278 +20,200 @@ class ReminderSettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _ReminderSettingsScreenState extends ConsumerState<ReminderSettingsScreen> {
-  late bool _appNotifications;
-  late bool _smsReminders;
-  late bool _caregiverAlerts;
-  late bool _dailySummarySms;
-  String _selectedTone = 'Default Tone';
+  bool _settingTest = false;
 
-  @override
-  void initState() {
-    super.initState();
-    final settings = ref.read(appSettingsProvider);
-    _appNotifications = settings.appNotifications;
-    _smsReminders = settings.smsReminders;
-    _caregiverAlerts = settings.caregiverAlerts;
-    _dailySummarySms = settings.dailySummarySms;
+  Future<void> _toggleReminders(bool value, String lang) async {
+    if (!value) {
+      final confirmed = await showConfirmDialog(
+        context,
+        title: lang == 'bn' ? 'অ্যালার্ম বন্ধ করবেন?' : 'Turn off medicine alarms?',
+        message: lang == 'bn'
+            ? 'বন্ধ করলে এই ফোনে কোনো ওষুধের অ্যালার্ম বাজবে না। আপনি কি নিশ্চিত?'
+            : 'If you turn this off, NO medicine alarms will ring on this phone. Are you sure?',
+        confirmLabel: lang == 'bn' ? 'হ্যাঁ, বন্ধ করুন' : 'Yes, turn off alarms',
+        cancelLabel: lang == 'bn' ? 'না, চালু রাখুন' : 'No, keep alarms on',
+        icon: Icons.notifications_off_rounded,
+      );
+      if (!confirmed) return;
+    }
+    ref.read(appSettingsProvider.notifier).updateToggles(appNotifications: value);
+    // Apply immediately: previously the switch was saved but alarms kept (or never
+    // started) ringing until the medicine list happened to change.
+    await NotificationService.instance.rescheduleAll(
+      ref.read(medicinesProvider),
+      logs: ref.read(doseLogsProvider),
+    );
+    if (value) {
+      await NotificationService.instance.requestPermissions();
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(value
+            ? (lang == 'bn' ? 'ওষুধের অ্যালার্ম চালু করা হয়েছে' : 'Medicine alarms are on')
+            : (lang == 'bn' ? 'ওষুধের অ্যালার্ম বন্ধ করা হয়েছে' : 'Medicine alarms are off')),
+        backgroundColor: value ? AppColors.success : AppColors.error,
+      ),
+    );
+  }
+
+  Future<void> _setTestAlarm(String lang) async {
+    if (_settingTest) return;
+    setState(() => _settingTest = true);
+    try {
+      if (kIsWeb) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(lang == 'bn' ? 'ওয়েবে অ্যালার্ম কাজ করে না। ফোনের অ্যাপ ব্যবহার করুন।' : 'Alarms do not work in the web version. Please use the phone app.')),
+        );
+        return;
+      }
+      await NotificationService.instance.requestPermissions();
+      final at = await NotificationService.instance.scheduleOneMinuteTestAlarm();
+      if (!mounted) return;
+      final hh = at.hour % 12 == 0 ? 12 : at.hour % 12;
+      final mm = at.minute.toString().padLeft(2, '0');
+      final ampm = at.hour < 12 ? 'AM' : 'PM';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 6),
+          content: Text(lang == 'bn'
+              ? 'পরীক্ষামূলক অ্যালার্ম $hh:$mm $ampm-এ বাজবে। ফোন লক করে অপেক্ষা করুন।'
+              : 'A test alarm will ring at $hh:$mm $ampm. Lock the phone and wait.'),
+          backgroundColor: AppColors.success,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(lang == 'bn' ? 'অ্যালার্ম সেট করা যায়নি: $e' : 'Could not set the test alarm: $e'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _settingTest = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final settings = ref.watch(appSettingsProvider);
     final lang = settings.language;
-
-    final title = lang == 'bn' ? 'রিমাইন্ডার সেটিংস' : 'Reminder Settings';
+    final remindersOn = settings.appNotificationsEnabled;
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(title),
-        backgroundColor: Colors.transparent,
-        foregroundColor: AppColors.textPrimary,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-      ),
+      appBar: AppBar(title: Text(lang == 'bn' ? 'রিমাইন্ডার ও অ্যালার্ম' : 'Reminders & alarms')),
       body: SafeArea(
-        child: SingleChildScrollView(
+        child: ListView(
           padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 10.0),
-              FadeSlideIn(
-                child: Text(
-                  lang == 'bn' ? 'অ্যালার্ম ও নোটিফিকেশন' : 'Alerts & Notifications',
-                  style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                        fontSize: 20.0,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.primaryDark,
-                      ),
-                ),
+          children: [
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20.0),
+                border: Border.all(color: remindersOn ? AppColors.border : AppColors.error, width: remindersOn ? 1 : 2),
               ),
-              const SizedBox(height: 8.0),
-              FadeSlideIn(
-                delay: const Duration(milliseconds: 100),
-                child: Text(
-                  lang == 'bn'
-                      ? 'আপনার ওষুধ খাওয়ার নোটিফিকেশন সেটিংস এখানে পরিবর্তন করুন।'
-                      : 'Manage how and when you want to be reminded about your medicines.',
-                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 14.5, height: 1.3),
+              child: SwitchListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                title: Text(
+                  lang == 'bn' ? 'ওষুধের অ্যালার্ম' : 'Medicine alarms',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18.0, color: AppColors.textPrimary),
                 ),
-              ),
-              const SizedBox(height: 28.0),
-
-              // Switch Tiles
-              FadeSlideIn(
-                delay: const Duration(milliseconds: 150),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20.0),
-                    border: Border.all(color: AppColors.border),
-                  ),
-                  child: Column(
-                    children: [
-                      SwitchListTile(
-                        activeTrackColor: AppColors.primary,
-                        title: Text(lang == 'bn' ? 'অ্যাপ নোটিফিকেশন' : 'App Notifications', style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-                        subtitle: Text(lang == 'bn' ? 'ফোনে ইনস্ট্যান্ট অ্যালার্ট' : 'Receive push alerts on this device', style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 12.0, color: AppColors.textSecondary)),
-                        value: _appNotifications,
-                        onChanged: (val) {
-                          setState(() {
-                            _appNotifications = val;
-                          });
-                        },
-                      ),
-                      const Divider(height: 1, color: AppColors.border),
-                      SwitchListTile(
-                        activeTrackColor: AppColors.primary,
-                        title: Text(lang == 'bn' ? 'এসএমএস রিমাইন্ডার' : 'SMS Reminders', style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-                        subtitle: Text(lang == 'bn' ? 'ইন্টারনেট ছাড়া রিমাইন্ডার' : 'Send offline SMS reminders to patient', style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 12.0, color: AppColors.textSecondary)),
-                        value: _smsReminders,
-                        onChanged: (val) {
-                          setState(() {
-                            _smsReminders = val;
-                          });
-                        },
-                      ),
-                      const Divider(height: 1, color: AppColors.border),
-                      SwitchListTile(
-                        activeTrackColor: AppColors.primary,
-                        title: Text(lang == 'bn' ? 'কেয়ারগিভার অ্যালার্ট' : 'Caregiver Missed-Dose Alerts', style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-                        subtitle: Text(lang == 'bn' ? 'ওষুধ মিস হলে পরিবারের কাছে এসএমএস' : 'Notify family if dose is missed', style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 12.0, color: AppColors.textSecondary)),
-                        value: _caregiverAlerts,
-                        onChanged: (val) {
-                          setState(() {
-                            _caregiverAlerts = val;
-                          });
-                        },
-                      ),
-                      const Divider(height: 1, color: AppColors.border),
-                      SwitchListTile(
-                        activeTrackColor: AppColors.primary,
-                        title: Text(lang == 'bn' ? 'দৈনিক সারাংশ এসএমএস' : 'Daily Summary SMS', style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-                        subtitle: Text(lang == 'bn' ? 'প্রতিদিনের কাজের সংক্ষিপ্ত মেসেজ' : 'Send daily adherence brief via SMS', style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 12.0, color: AppColors.textSecondary)),
-                        value: _dailySummarySms,
-                        onChanged: (val) {
-                          setState(() {
-                            _dailySummarySms = val;
-                          });
-                        },
-                      ),
-                    ],
+                subtitle: Padding(
+                  padding: const EdgeInsets.only(top: 4.0),
+                  child: Text(
+                    remindersOn
+                        ? (lang == 'bn' ? 'চালু — প্রতিটি ডোজের সময় ফোনে অ্যালার্ম বাজবে' : 'On — your phone rings at each dose time')
+                        : (lang == 'bn' ? 'বন্ধ — কোনো অ্যালার্ম বাজবে না' : 'Off — no alarms will ring'),
+                    style: TextStyle(
+                      fontSize: 16.0,
+                      color: remindersOn ? AppColors.textSecondary : AppColors.error,
+                      fontWeight: remindersOn ? FontWeight.normal : FontWeight.bold,
+                    ),
                   ),
                 ),
+                value: remindersOn,
+                onChanged: (v) => _toggleReminders(v, lang),
               ),
-              const SizedBox(height: 24.0),
-
-              // Tone selector
-              FadeSlideIn(
-                delay: const Duration(milliseconds: 200),
-                child: Text(
-                  lang == 'bn' ? 'রিমাইন্ডারের রিংটোন' : 'Reminder Tone',
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16.0, color: AppColors.textPrimary),
+            ),
+            const SizedBox(height: 12.0),
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20.0),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: SwitchListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                title: Text(
+                  lang == 'bn' ? 'মিস হওয়া ডোজ দেখান' : 'Show missed doses',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18.0, color: AppColors.textPrimary),
                 ),
-              ),
-              const SizedBox(height: 10.0),
-              FadeSlideIn(
-                delay: const Duration(milliseconds: 250),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16.0),
-                    border: Border.all(color: AppColors.border),
-                  ),
-                  child: ListTile(
-                    leading: const Icon(Icons.music_note_rounded, color: AppColors.primary),
-                    title: Text(_selectedTone, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14.5, color: AppColors.textPrimary)),
-                    trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16.0, color: Colors.grey),
-                    onTap: () {
-                      // Quick alert selection stub
-                      showDialog(
-                        context: context,
-                        builder: (context) => AlertDialog(
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                          title: Text(lang == 'bn' ? 'টোন নির্বাচন করুন' : 'Select Tone'),
-                          content: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: ['Default Tone', 'Loud Medical Alarm', 'Soft Chime', 'Vibration Only']
-                                .map((tone) => ListTile(
-                                      title: Text(tone, style: const TextStyle(fontWeight: FontWeight.bold)),
-                                      onTap: () {
-                                        setState(() {
-                                          _selectedTone = tone;
-                                        });
-                                        Navigator.pop(context);
-                                      },
-                                    ))
-                                .toList(),
-                          ),
-                        ),
-                      );
-                    },
+                subtitle: Padding(
+                  padding: const EdgeInsets.only(top: 4.0),
+                  child: Text(
+                    lang == 'bn'
+                        ? 'এই ফোনের "পরিবার" অংশে মিস হওয়া ডোজের সতর্কতা দেখাবে। (পরিবারের অন্য ফোনে বার্তা যায় না।)'
+                        : 'Lists missed-dose alerts in the Family tab on this phone. (Nothing is sent to other phones.)',
+                    style: const TextStyle(fontSize: 16.0, color: AppColors.textSecondary),
                   ),
                 ),
+                value: settings.caregiverAlertsEnabled,
+                onChanged: (v) => ref.read(appSettingsProvider.notifier).updateToggles(caregiverAlerts: v),
               ),
-              const SizedBox(height: 20.0),
-
-              // 1-Minute Full-Screen Alarm Real Test Trigger
-              FadeSlideIn(
-                delay: const Duration(milliseconds: 270),
-                child: Container(
-                  padding: const EdgeInsets.all(16.0),
-                  decoration: BoxDecoration(
-                    color: AppColors.primaryLight.withValues(alpha: 0.5),
-                    borderRadius: BorderRadius.circular(16.0),
-                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+            ),
+            const SizedBox(height: 24.0),
+            Container(
+              padding: const EdgeInsets.all(18.0),
+              decoration: BoxDecoration(
+                color: AppColors.primaryLight,
+                borderRadius: BorderRadius.circular(20.0),
+                border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    lang == 'bn' ? 'অ্যালার্ম পরীক্ষা করুন' : 'Check that alarms work',
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18.0, color: AppColors.primaryDark),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.bolt_rounded, color: AppColors.primary),
-                          const SizedBox(width: 8.0),
-                          Text(
-                            lang == 'bn' ? 'অ্যালার্ম পরীক্ষা (১ মিনিট পর)' : 'Alarm Test (in 1 minute)',
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15.0, color: AppColors.primaryDark),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6.0),
-                      Text(
-                        lang == 'bn'
-                            ? '১ মিনিট পর সরাসরি ফুল-স্ক্রিন অ্যালার্ম বেজে উঠবে। আপনি অ্যাপ খোলা রাখতে পারেন, মিনিমাইজ করতে পারেন বা স্ক্রিন লক করে পরীক্ষা করতে পারেন।'
-                            : 'Triggers a full-screen alarm in 1 minute. You can keep the app open, background it, or lock the screen to verify.',
-                        style: const TextStyle(fontSize: 12.5, color: AppColors.textSecondary),
-                      ),
-                      const SizedBox(height: 12.0),
-                      SizedBox(
-                        width: double.infinity,
-                        height: 44.0,
-                        child: OutlinedButton.icon(
-                          icon: const Icon(Icons.notification_add_rounded, size: 18.0),
-                          label: Text(
-                            lang == 'bn' ? '🚨 ১ মিনিটের টেস্ট অ্যালার্ম সেট করুন' : '🚨 Set 1-Minute Test Alarm',
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
-                          ),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppColors.primaryDark,
-                            side: const BorderSide(color: AppColors.primary),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.0)),
-                          ),
-                          onPressed: () async {
-                            final meds = ref.read(medicinesProvider);
-                            final scheduledDt = await NotificationService.instance.scheduleOneMinuteTestAlarm(meds);
-                            if (context.mounted) {
-                              final min = scheduledDt.minute.toString().padLeft(2, '0');
-                              final hour12 = scheduledDt.hour == 0 ? 12 : (scheduledDt.hour > 12 ? scheduledDt.hour - 12 : scheduledDt.hour);
-                              final ampm = scheduledDt.hour >= 12 ? 'PM' : 'AM';
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    lang == 'bn'
-                                        ? '১ মিনিটের টেস্ট অ্যালার্ম নির্ধারণ করা হয়েছে ($hour12:$min $ampm)। স্ক্রিন লক করে বা মিনিমাইজ করে পরীক্ষা করতে পারেন।'
-                                        : 'Test alarm scheduled for $hour12:$min $ampm. You can lock or background the device.',
-                                  ),
-                                  backgroundColor: AppColors.primaryDark,
-                                  duration: const Duration(seconds: 4),
-                                ),
-                              );
-                            }
-                          },
-                        ),
-                      ),
-                    ],
+                  const SizedBox(height: 8.0),
+                  Text(
+                    lang == 'bn'
+                        ? 'এক মিনিট পরে একটি পরীক্ষামূলক অ্যালার্ম বাজবে। এতে কোনো ডোজ রেকর্ড হয় না। নতুন ফোনে বা ব্যাটারি সেভার চালু থাকলে অবশ্যই একবার পরীক্ষা করুন।'
+                        : 'A test alarm rings in one minute. No dose is recorded. Please try this once on every new phone, and if battery saver is on.',
+                    style: const TextStyle(fontSize: 16.0, color: AppColors.textPrimary, height: 1.4),
                   ),
-                ),
+                  const SizedBox(height: 14.0),
+                  ElevatedButton.icon(
+                    onPressed: (!remindersOn || _settingTest) ? null : () => _setTestAlarm(lang),
+                    icon: const Icon(Icons.alarm_add_rounded, size: 24),
+                    label: Text(lang == 'bn' ? '১ মিনিট পরে পরীক্ষামূলক অ্যালার্ম' : 'Ring a test alarm in 1 minute'),
+                    style: ElevatedButton.styleFrom(
+                      minimumSize: const Size(double.infinity, 56),
+                      textStyle: const TextStyle(fontSize: 16.0, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  if (NotificationService.instance.exactAlarmsUnavailable) ...[
+                    const SizedBox(height: 12.0),
+                    Text(
+                      lang == 'bn'
+                          ? 'এই ফোন সঠিক সময়ের অ্যালার্মের অনুমতি দেয়নি, তাই অ্যালার্ম কয়েক মিনিট দেরিতে বাজতে পারে। ফোনের সেটিংসে "Alarms & reminders" অনুমতি চালু করুন।'
+                          : 'This phone has not allowed exact alarms, so reminders may ring a few minutes late. Turn on "Alarms & reminders" for OsudSheba in the phone settings.',
+                      style: const TextStyle(fontSize: 15.0, color: AppColors.error, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ],
               ),
-              const SizedBox(height: 24.0),
-
-              FadeSlideIn(
-                delay: const Duration(milliseconds: 300),
-                child: AppPrimaryButton(
-                  text: lang == 'bn' ? 'সেটিংস সংরক্ষণ করুন' : 'Save Settings',
-                  icon: Icons.check_circle_outline_rounded,
-                  onPressed: () {
-                    ref.read(appSettingsProvider.notifier).updateToggles(
-                          appNotifications: _appNotifications,
-                          smsReminders: _smsReminders,
-                          caregiverAlerts: _caregiverAlerts,
-                          dailySummarySms: _dailySummarySms,
-                        );
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(lang == 'bn' ? 'সেটিংস সংরক্ষণ করা হয়েছে' : 'Settings saved successfully!'),
-                        backgroundColor: AppColors.success,
-                      ),
-                    );
-                    context.pop();
-                  },
-                ),
-              ),
-              const SizedBox(height: 20.0),
-            ],
-          ),
+            ),
+            const SizedBox(height: 16.0),
+            Text(
+              lang == 'bn'
+                  ? 'অ্যালার্ম ঠিকমতো বাজাতে: ফোনের সাউন্ড চালু রাখুন, এবং ব্যাটারি সেটিংসে OsudSheba-কে "Unrestricted" বা "No restrictions" দিন।'
+                  : 'For reliable alarms: keep the phone sound on, and set OsudSheba to "Unrestricted" / "No restrictions" in the phone\'s battery settings.',
+              style: const TextStyle(fontSize: 15.0, color: AppColors.textSecondary, height: 1.4),
+            ),
+          ],
         ),
       ),
     );

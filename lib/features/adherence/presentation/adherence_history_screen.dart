@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../shared/widgets/fade_slide_in.dart';
+import '../../../shared/widgets/tap_area.dart';
 
 class AdherenceHistoryScreen extends ConsumerStatefulWidget {
   const AdherenceHistoryScreen({super.key});
@@ -142,13 +143,13 @@ class _AdherenceHistoryScreenState extends ConsumerState<AdherenceHistoryScreen>
                                         const SizedBox(height: 4.0),
                                         Text(
                                           '${lang == 'bn' ? 'নির্ধারিত সময়' : 'Scheduled'}: ${log.scheduledTime}',
-                                          style: const TextStyle(fontSize: 12.0, color: AppColors.textSecondary, fontWeight: FontWeight.w500),
+                                          style: const TextStyle(fontSize: 13.5, color: AppColors.textSecondary, fontWeight: FontWeight.w500),
                                         ),
                                         if (log.takenTime != null) ...[
                                           const SizedBox(height: 2.0),
                                           Text(
                                             '${lang == 'bn' ? 'খেয়েছেন' : 'Taken at'}: ${log.takenTime!.hour}:${log.takenTime!.minute.toString().padLeft(2, '0')}',
-                                            style: const TextStyle(color: AppColors.success, fontWeight: FontWeight.bold, fontSize: 12.0),
+                                            style: const TextStyle(color: AppColors.success, fontWeight: FontWeight.bold, fontSize: 13.5),
                                           ),
                                         ],
                                       ],
@@ -162,7 +163,7 @@ class _AdherenceHistoryScreenState extends ConsumerState<AdherenceHistoryScreen>
                                     ),
                                     child: Text(
                                       log.status,
-                                      style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 12.0),
+                                      style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 13.5),
                                     ),
                                   ),
                                 ],
@@ -181,7 +182,7 @@ class _AdherenceHistoryScreenState extends ConsumerState<AdherenceHistoryScreen>
 
   Widget _buildFilterChip(String filterKey, String label) {
     final isSelected = _selectedFilter == filterKey;
-    return GestureDetector(
+    return TapArea(
       onTap: () {
         setState(() {
           _selectedFilter = filterKey;

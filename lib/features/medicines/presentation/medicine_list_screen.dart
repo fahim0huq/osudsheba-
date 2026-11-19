@@ -5,6 +5,9 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../shared/widgets/medicine_card.dart';
 import '../../../shared/widgets/fade_slide_in.dart';
+import '../../../shared/widgets/tap_area.dart';
+import '../../../core/utils/schedule_utils.dart';
+import '../../../core/utils/time_utils.dart';
 
 class MedicineListScreen extends ConsumerStatefulWidget {
   const MedicineListScreen({super.key});
@@ -25,11 +28,6 @@ class _MedicineListScreenState extends ConsumerState<MedicineListScreen> {
     final logs = ref.watch(doseLogsProvider);
 
     final now = DateTime.now();
-    final todayLogs = logs.where((l) =>
-        l.actualTime != null &&
-        l.actualTime!.day == now.day &&
-        l.actualTime!.month == now.month &&
-        l.actualTime!.year == now.year).toList();
 
     // Apply filtering and search
     final filteredMedicines = medicines.where((med) {
@@ -41,27 +39,18 @@ class _MedicineListScreenState extends ConsumerState<MedicineListScreen> {
 
       // Filter chip check
       if (_selectedFilter == 'All') return true;
-      if (_selectedFilter == 'Missed') return med.status == 'Missed';
+      // "Missed" = a dose of this medicine was missed today. (Previously this compared the
+      // medicine's own status, which is never "Missed", so the filter was always empty.)
+      if (_selectedFilter == 'Missed') return todayStatusFor(med, logs, now) == 'Missed';
 
-      // Time filters: Morning, Afternoon, Night
+      // Time filters: Morning (before 12 PM), Afternoon (12-5 PM), Night (5 PM onwards)
       bool matchesTime = false;
       for (final time in med.times) {
-        if (_selectedFilter == 'Morning') {
-          // Typically AM times
-          if (time.toUpperCase().contains('AM')) matchesTime = true;
-        } else if (_selectedFilter == 'Afternoon') {
-          // E.g., 12:00 PM to 04:59 PM
-          if (time.toUpperCase().contains('PM')) {
-            final hour = int.tryParse(time.split(':').first) ?? 0;
-            if (hour == 12 || (hour >= 1 && hour < 5)) matchesTime = true;
-          }
-        } else if (_selectedFilter == 'Night') {
-          // E.g., 05:00 PM onwards
-          if (time.toUpperCase().contains('PM')) {
-            final hour = int.tryParse(time.split(':').first) ?? 0;
-            if (hour != 12 && hour >= 5) matchesTime = true;
-          }
-        }
+        final m = minutesOfDay(time);
+        if (m < 0) continue;
+        if (_selectedFilter == 'Morning' && m < 12 * 60) matchesTime = true;
+        if (_selectedFilter == 'Afternoon' && m >= 12 * 60 && m < 17 * 60) matchesTime = true;
+        if (_selectedFilter == 'Night' && m >= 17 * 60) matchesTime = true;
       }
       return matchesTime;
     }).toList();
@@ -168,22 +157,11 @@ class _MedicineListScreenState extends ConsumerState<MedicineListScreen> {
                         itemCount: filteredMedicines.length,
                         itemBuilder: (context, index) {
                           final med = filteredMedicines[index];
-                          final todayMedLogs = todayLogs.where((l) => l.medicineId == med.id).toList();
-                          String displayStatus = 'Pending';
-                          if (todayMedLogs.any((l) => l.status == 'taken')) {
-                            displayStatus = 'Taken';
-                          } else if (todayMedLogs.any((l) => l.status == 'skipped')) {
-                            displayStatus = 'Skipped';
-                          } else if (todayMedLogs.any((l) => l.status == 'snoozed')) {
-                            displayStatus = 'Snoozed';
-                          } else if (todayMedLogs.any((l) => l.status == 'missed')) {
-                            displayStatus = 'Missed';
-                          } else {
-                            displayStatus = med.status == 'active' ? 'Pending' : med.status;
-                          }
+                          final displayStatus = todayStatusFor(med, logs, now);
                           final displayMed = med.copyWith(status: displayStatus);
 
                           return MedicineCard(
+                            language: lang,
                             medicine: displayMed,
                             onTap: () {
                               ref.read(selectedMedicineProvider.notifier).state = med;
@@ -197,7 +175,7 @@ class _MedicineListScreenState extends ConsumerState<MedicineListScreen> {
           ],
         ),
       ),
-      floatingActionButton: GestureDetector(
+      floatingActionButton: TapArea(
         onTap: () => context.push('/add-medicine'),
         child: Container(
           width: 56,
@@ -225,7 +203,7 @@ class _MedicineListScreenState extends ConsumerState<MedicineListScreen> {
 
   Widget _buildFilterChip(String filterKey, String label) {
     final isSelected = _selectedFilter == filterKey;
-    return GestureDetector(
+    return TapArea(
       onTap: () {
         setState(() {
           _selectedFilter = filterKey;

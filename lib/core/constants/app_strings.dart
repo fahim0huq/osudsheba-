@@ -1,20 +1,20 @@
 class AppStrings {
   // Common
   static const String appName = 'OsudSheba';
-  static const String appSlogan = 'AI-powered medicine reminder for Bangladesh';
+  static const String appSlogan = 'Medicine reminder for Bangladesh, in Bangla and English';
 
   // We can support switching language with a simple helper static method
   static String get(String key, String lang) {
     final Map<String, Map<String, String>> localizedValues = {
       'en': {
         'onboarding_title': 'OsudSheba',
-        'onboarding_subtitle': 'AI-powered medicine reminder for Bangladesh',
+        'onboarding_subtitle': 'Medicine reminder for Bangladesh, in Bangla and English',
         'highlight_1_title': 'Understand Prescriptions',
-        'highlight_1_desc': 'Scan prescription photo using AI to auto-extract schedules.',
+        'highlight_1_desc': 'Take a photo of a prescription and review the medicines it finds before saving.',
         'highlight_2_title': 'Smart Reminders',
-        'highlight_2_desc': 'Never miss a dose with app notifications and SMS alerts.',
+        'highlight_2_desc': 'A loud alarm on your phone reminds you when each dose is due.',
         'highlight_3_title': 'Family Monitoring',
-        'highlight_3_desc': 'Let caregivers monitor and get alerted when you miss a dose.',
+        'highlight_3_desc': 'See which doses were taken or missed, so family members can help when needed.',
         'get_started': 'Get Started',
         'continue_btn': 'Continue',
         'confirm_btn': 'Confirm & Save',
@@ -29,7 +29,7 @@ class AppStrings {
         'login_subtitle': 'Enter your mobile number to get started',
         'phone_hint': '1XXXXXXXXX',
         'phone_label': 'Mobile Number',
-        'medical_disclaimer': 'Disclaimer: OsudSheba is an AI assistant to help you track medicines. Always verify schedules with your doctor. AI can make mistakes.',
+        'medical_disclaimer': 'Disclaimer: OsudSheba helps you keep track of your medicines; it is not a doctor. Always check your schedule with your doctor. Prescription scanning can misread, so check every medicine before saving.',
         'send_otp': 'Send Verification Code',
         'otp_title': 'Verification Code',
         'otp_subtitle': 'We sent a 6-digit code to your phone',
@@ -94,7 +94,7 @@ class AppStrings {
         'auth_error_email_in_use': 'Email already in use',
         'auth_error_google_failed': 'Google sign in failed',
         'auth_error_network': 'Network error. Please try again.',
-        'password_reset_sent': 'Password reset link sent to your email!',
+        'password_reset_sent': 'If this email has an OsudSheba password account, a reset link is on its way. Check your inbox and spam folder. (Accounts that sign in with Google or phone have no password to reset.)',
         'password_reset_title': 'Reset password',
         'password_reset_subtitle': 'Enter your email to receive a password reset link',
         'password_reset_btn': 'Send Reset Link',
@@ -112,13 +112,13 @@ class AppStrings {
       },
       'bn': {
         'onboarding_title': 'ওষুধসেবা',
-        'onboarding_subtitle': 'বাংলাদেশের জন্য এআই-চালিত ওষুধের রিমাইন্ডার',
+        'onboarding_subtitle': 'বাংলাদেশের জন্য বাংলা ও ইংরেজিতে ওষুধের রিমাইন্ডার',
         'highlight_1_title': 'প্রেসক্রিপশন বুঝুন',
-        'highlight_1_desc': 'এআই ব্যবহার করে প্রেসক্রিপশনের ছবি থেকে স্বয়ংক্রিয়ভাবে তালিকা তৈরি করুন।',
+        'highlight_1_desc': 'প্রেসক্রিপশনের ছবি তুলুন, পাওয়া ওষুধগুলো যাচাই করে তারপর সংরক্ষণ করুন।',
         'highlight_2_title': 'স্মার্ট রিমাইন্ডার',
-        'highlight_2_desc': 'অ্যাপ নোটিফিকেশন ও এসএমএস অ্যালার্টের মাধ্যমে ওষুধ খেতে ভুলবেন না।',
+        'highlight_2_desc': 'প্রতিটি ডোজের সময় হলে ফোনে জোরে অ্যালার্ম বেজে আপনাকে মনে করিয়ে দেবে।',
         'highlight_3_title': 'পারিবারিক মনিটরিং',
-        'highlight_3_desc': 'ওষুধ মিস হলে পরিবারের সদস্যরা স্বয়ংক্রিয়ভাবে অ্যালার্ট পাবেন।',
+        'highlight_3_desc': 'কোন ডোজ খাওয়া হয়েছে বা বাদ পড়েছে তা দেখুন, যাতে পরিবারের সদস্যরা প্রয়োজনে সাহায্য করতে পারেন।',
         'get_started': 'শুরু করুন',
         'continue_btn': 'এগিয়ে যান',
         'confirm_btn': 'নিশ্চিত ও সংরক্ষণ করুন',
@@ -133,7 +133,7 @@ class AppStrings {
         'login_subtitle': 'শুরু করতে আপনার মোবাইল নাম্বারটি দিন',
         'phone_hint': '১XXXXXXXXX',
         'phone_label': 'মোবাইল নাম্বার',
-        'medical_disclaimer': 'সতর্কতা: ওষুধসেবা একটি এআই সহকারী। ওষুধ খাওয়ার আগে দয়া করে ডাক্তারের পরামর্শ মিলিয়ে নিন। এআই ভুল করতে পারে।',
+        'medical_disclaimer': 'সতর্কতা: ওষুধসেবা আপনাকে ওষুধের হিসাব রাখতে সাহায্য করে, এটি ডাক্তার নয়। ওষুধের সময়সূচি সবসময় ডাক্তারের সাথে মিলিয়ে নিন। প্রেসক্রিপশন স্ক্যান ভুল পড়তে পারে, তাই সংরক্ষণের আগে প্রতিটি ওষুধ দেখে নিন।',
         'send_otp': 'ওটিপি পাঠান',
         'otp_title': 'ওটিপি ভেরিফিকেশন',
         'otp_subtitle': 'আপনার ফোনে পাঠানো ৬-ডিজিটের কোডটি লিখুন',
@@ -198,7 +198,7 @@ class AppStrings {
         'auth_error_email_in_use': 'ইমেইলটি ইতিমধ্যে ব্যবহৃত হচ্ছে',
         'auth_error_google_failed': 'গুগল সাইন ইন ব্যর্থ হয়েছে',
         'auth_error_network': 'নেটওয়ার্ক সমস্যা। আবার চেষ্টা করুন।',
-        'password_reset_sent': 'পাসওয়ার্ড রিসেট লিংক আপনার ইমেইলে পাঠানো হয়েছে!',
+        'password_reset_sent': 'এই ইমেইলে ওষুধসেবার পাসওয়ার্ড অ্যাকাউন্ট থাকলে রিসেট লিংক পাঠানো হয়েছে। ইনবক্স ও স্প্যাম ফোল্ডার দেখুন। (Google বা ফোন দিয়ে ঢুকলে কোনো পাসওয়ার্ড নেই।)',
         'password_reset_title': 'পাসওয়ার্ড রিসেট',
         'password_reset_subtitle': 'রিসেট লিংক পেতে আপনার ইমেইলটি দিন',
         'password_reset_btn': 'রিসেট লিংক পাঠান',

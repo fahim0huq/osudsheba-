@@ -4,12 +4,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../core/constants/app_colors.dart';
+import '../../../core/constants/app_features.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../core/providers/subscription_provider.dart';
 import '../../../core/models/subscription.dart';
 import '../../../shared/widgets/fade_slide_in.dart';
+import '../../../shared/widgets/confirm_dialog.dart';
+import '../../../core/providers/family_providers.dart';
+import 'cloud_backup_tile.dart';
+import 'delete_account_tile.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -72,7 +77,7 @@ class SettingsScreen extends ConsumerWidget {
                   trailing: IconButton(
                     icon: const Icon(Icons.edit_rounded, color: AppColors.primary),
                     onPressed: () {
-                      final activeRole = profile.role != 'None' ? profile.role : settings.userRole;
+                      final activeRole = effectiveRole(profile.role != 'None' ? profile.role : settings.userRole);
                       if (activeRole == 'Patient') {
                         context.push('/patient-profile-setup');
                       } else if (activeRole == 'Caregiver') {
@@ -118,7 +123,7 @@ class SettingsScreen extends ConsumerWidget {
                         ? (lang == 'bn' ? 'সক্রিয় (দৈনিক ২ টাকা)' : 'Active (Daily BDT 2)')
                         : (lang == 'bn' ? 'সাবস্ক্রিপশন প্রয়োজন' : 'Subscription Required'),
                     style: TextStyle(
-                      fontSize: 12.5,
+                      fontSize: 13.5,
                       color: (sub?.isEntitled ?? false) ? AppColors.success : AppColors.error,
                       fontWeight: FontWeight.w600,
                     ),
@@ -145,18 +150,17 @@ class SettingsScreen extends ConsumerWidget {
               child: _buildSettingTile(
                 context,
                 icon: Icons.alarm_rounded,
-                title: lang == 'bn' ? 'রিমাইন্ডার সেটিংস' : 'Reminder Settings',
+                title: lang == 'bn' ? 'রিমাইন্ডার ও অ্যালার্ম' : 'Reminders & alarms',
                 onTap: () => context.push('/reminder-settings'),
               ),
             ),
             FadeSlideIn(
               delay: const Duration(milliseconds: 200),
-              child: _buildSettingTile(
-                context,
-                icon: Icons.notifications_rounded,
-                title: lang == 'bn' ? 'নোটিফিকেশন সেটিংস' : 'Notification Settings',
-                onTap: () => context.push('/notification-settings'),
-              ),
+              child: _buildTextSizeSelector(context, ref, lang, settings.textScale),
+            ),
+            const FadeSlideIn(
+              delay: Duration(milliseconds: 225),
+              child: CloudBackupTile(),
             ),
             FadeSlideIn(
               delay: const Duration(milliseconds: 250),
@@ -186,10 +190,12 @@ class SettingsScreen extends ConsumerWidget {
                   showAboutDialog(
                     context: context,
                     applicationName: 'OsudSheba',
-                    applicationVersion: '1.0.0 (Prototype)',
+                    applicationVersion: '1.0.0',
                     applicationIcon: const Icon(Icons.healing_rounded, color: AppColors.primary, size: 40.0),
                     children: [
-                      const Text('AI-powered medicine reminder platform custom designed for patients in Bangladesh.'),
+                      Text(lang == 'bn'
+                          ? 'ওষুধ খাওয়ার সময় মনে করিয়ে দেওয়ার অ্যাপ। এটি ডাক্তারের পরামর্শের বিকল্প নয় এবং জরুরি অবস্থায় সাহায্য পাঠায় না। জরুরি প্রয়োজনে ৯৯৯ নম্বরে কল করুন।'
+                          : 'A medicine reminder app. It does not replace advice from your doctor or pharmacist, and it cannot call for help in an emergency. In an emergency, call 999.'),
                     ],
                   );
                 },
@@ -213,8 +219,28 @@ class SettingsScreen extends ConsumerWidget {
                     style: const TextStyle(color: AppColors.error, fontWeight: FontWeight.bold, fontSize: 15.0),
                   ),
                   onTap: () async {
+                    final confirmed = await showConfirmDialog(
+                      context,
+                      title: lang == 'bn' ? 'লগআউট করবেন?' : 'Log out?',
+                      message: lang == 'bn'
+                          ? 'লগআউট করলে এই ফোনে ওষুধের অ্যালার্ম বন্ধ হয়ে যাবে, যতক্ষণ না আবার লগইন করেন। আপনার ওষুধের তালিকা মুছে যাবে না।'
+                          : 'While you are logged out, medicine alarms will NOT ring on this phone. Your medicine list is kept and comes back when you log in again.',
+                      confirmLabel: lang == 'bn' ? 'হ্যাঁ, লগআউট করুন' : 'Yes, log out',
+                      cancelLabel: lang == 'bn' ? 'না, থাকুন' : 'No, stay logged in',
+                      icon: Icons.logout_rounded,
+                    );
+                    if (!confirmed) return;
+
                     final uid = ref.read(userUidProvider);
-                    
+
+                    // Alarms belong to this user's medicines; stop them so the next person
+                    // to use the phone does not get this user's reminders.
+                    await NotificationService.instance.cancelAll();
+
+                    // ...and family reminders for this account stop arriving here.
+                    final family = ref.read(familyServiceProvider);
+                    if (family != null && uid != null) await unregisterFromPush(family, uid);
+
                     // Mark session as logged out in the profile
                     ref.read(userProfileProvider.notifier).clearSessionOnly();
                     
@@ -272,6 +298,13 @@ class SettingsScreen extends ConsumerWidget {
                 ),
               ),
             ),
+            const SizedBox(height: 12.0),
+
+            // Delete Account (Google Play requirement)
+            const FadeSlideIn(
+              delay: Duration(milliseconds: 475),
+              child: DeleteAccountTile(),
+            ),
             if (kDebugMode) ...[
               const SizedBox(height: 12.0),
               FadeSlideIn(
@@ -308,6 +341,54 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
+  Widget _buildTextSizeSelector(BuildContext context, WidgetRef ref, String lang, double current) {
+    final options = <(double, String)>[
+      (1.0, lang == 'bn' ? 'স্বাভাবিক' : 'Normal'),
+      (1.1, lang == 'bn' ? 'বড়' : 'Large'),
+      (1.25, lang == 'bn' ? 'আরও বড়' : 'Larger'),
+      (1.4, lang == 'bn' ? 'সবচেয়ে বড়' : 'Largest'),
+    ];
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10.0),
+      padding: const EdgeInsets.all(16.0),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16.0),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.format_size_rounded, color: AppColors.primary),
+              const SizedBox(width: 16.0),
+              Text(
+                lang == 'bn' ? 'লেখার আকার' : 'Text size',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17.0, color: AppColors.textPrimary),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12.0),
+          Wrap(
+            spacing: 8.0,
+            runSpacing: 8.0,
+            children: [
+              for (final (scale, label) in options)
+                ChoiceChip(
+                  label: Text(label, style: const TextStyle(fontSize: 16.0)),
+                  selected: (current - scale).abs() < 0.01,
+                  selectedColor: AppColors.softGreen,
+                  materialTapTargetSize: MaterialTapTargetSize.padded,
+                  onSelected: (_) => ref.read(appSettingsProvider.notifier).setTextScale(scale),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildSettingTile(
     BuildContext context, {
     required IconData icon,
@@ -325,9 +406,10 @@ class SettingsScreen extends ConsumerWidget {
         leading: Icon(icon, color: AppColors.primary),
         title: Text(
           title,
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14.5, color: AppColors.textPrimary),
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17.0, color: AppColors.textPrimary),
         ),
-        trailing: const Icon(Icons.chevron_right_rounded, color: Colors.grey),
+        minVerticalPadding: 14.0,
+        trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textSecondary),
         onTap: onTap,
       ),
     );
@@ -360,7 +442,7 @@ class SettingsScreen extends ConsumerWidget {
               const SizedBox(height: 16.0),
               Text(
                 lang == 'bn'
-                    ? 'নিশ্চিত করতে নিচের বক্সে "DELETE" লিখুন:'
+                    ? 'নিশ্চিত করতে নিচের বক্সে "মুছুন" অথবা "DELETE" লিখুন:'
                     : 'Type "DELETE" in the box below to confirm:',
                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.0),
               ),
@@ -381,10 +463,12 @@ class SettingsScreen extends ConsumerWidget {
             ),
             ElevatedButton(
               onPressed: () async {
-                if (textController.text.trim() == 'DELETE') {
+                final typed = textController.text.trim();
+                if (typed.toUpperCase() == 'DELETE' || typed == 'মুছুন') {
                   Navigator.of(context).pop();
                   
-                  // Wipe Hive
+                  // Stop this user's alarms, then wipe Hive
+                  await NotificationService.instance.cancelAll();
                   await ref.read(localStorageProvider).clearAllData(profileId);
 
                   // Reset Providers
@@ -567,13 +651,31 @@ class SettingsScreen extends ConsumerWidget {
                   ),
                 );
 
-                await ref.read(subscriptionProvider.notifier).unsubscribe();
+                try {
+                  await ref.read(subscriptionProvider.notifier).unsubscribe();
+                } catch (e) {
+                  // Do not claim success: the operator may still be charging the user.
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        duration: const Duration(seconds: 8),
+                        content: Text(isBn
+                            ? 'সাবস্ক্রিপশন বাতিল করা যায়নি। আপনার কাছ থেকে এখনো টাকা কাটা হতে পারে। ইন্টারনেট সংযোগ দেখে আবার চেষ্টা করুন।'
+                            : 'Could not cancel the subscription. You may still be charged. Check your internet connection and try again.'),
+                        backgroundColor: AppColors.error,
+                      ),
+                    );
+                  }
+                  return;
+                }
 
                 if (context.mounted) {
+                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
-                      content: Text(isBn ? 'সাবস্ক্রিপশন বাতিল হয়েছে।' : 'Subscription cancelled successfully.'),
-                      backgroundColor: AppColors.error,
+                      content: Text(isBn ? 'সাবস্ক্রিপশন বাতিল হয়েছে।' : 'Subscription cancelled.'),
+                      backgroundColor: AppColors.success,
                     ),
                   );
                   context.go('/subscription');

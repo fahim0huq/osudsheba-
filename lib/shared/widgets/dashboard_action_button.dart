@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../core/constants/app_colors.dart';
+import 'tap_area.dart';
 
 class DashboardActionButton extends StatefulWidget {
   final String label;
@@ -45,7 +46,7 @@ class _DashboardActionButtonState extends State<DashboardActionButton> with Sing
   Widget build(BuildContext context) {
     _scale = 1.0 - _controller.value;
 
-    return GestureDetector(
+    return TapArea(
       behavior: HitTestBehavior.opaque,
       onTapDown: (_) => _controller.forward(),
       onTapUp: (_) => _controller.reverse(),

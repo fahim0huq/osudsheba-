@@ -22,10 +22,10 @@ class AppTheme {
           displaySmall: TextStyle(fontSize: 22.0, fontWeight: FontWeight.bold, color: AppColors.textPrimary, letterSpacing: -0.5),
           headlineMedium: TextStyle(fontSize: 19.0, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
           titleLarge: TextStyle(fontSize: 17.0, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
-          bodyLarge: TextStyle(fontSize: 15.0, fontWeight: FontWeight.normal, color: AppColors.textPrimary, height: 1.5),
-          bodyMedium: TextStyle(fontSize: 14.0, fontWeight: FontWeight.normal, color: AppColors.textSecondary, height: 1.5),
+          bodyLarge: TextStyle(fontSize: 17.0, fontWeight: FontWeight.normal, color: AppColors.textPrimary, height: 1.5),
+          bodyMedium: TextStyle(fontSize: 16.0, fontWeight: FontWeight.normal, color: AppColors.textSecondary, height: 1.5),
           labelLarge: TextStyle(fontSize: 15.0, fontWeight: FontWeight.bold, color: AppColors.textLight),
-          labelMedium: TextStyle(fontSize: 12.0, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+          labelMedium: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
         ),
       ),
       appBarTheme: const AppBarTheme(
@@ -81,6 +81,24 @@ class AppTheme {
           ),
         ),
       ),
+      // Larger, clearly visible tap targets and focus for keyboard / switch-access users.
+      materialTapTargetSize: MaterialTapTargetSize.padded,
+      visualDensity: VisualDensity.standard,
+      snackBarTheme: const SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
+        contentTextStyle: TextStyle(fontSize: 16.0, fontWeight: FontWeight.w600, color: Colors.white),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          minimumSize: const Size(48.0, 48.0),
+          textStyle: const TextStyle(fontSize: 16.0, fontWeight: FontWeight.bold),
+        ),
+      ),
+      switchTheme: SwitchThemeData(
+        trackOutlineColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected) ? AppColors.primary : AppColors.textSecondary,
+        ),
+      ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: Colors.white,
@@ -97,8 +115,10 @@ class AppTheme {
           borderRadius: BorderRadius.circular(16.0),
           borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
         ),
-        labelStyle: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
-        hintStyle: const TextStyle(color: Colors.grey, fontSize: 14),
+        labelStyle: const TextStyle(color: AppColors.textSecondary, fontSize: 16),
+        errorStyle: const TextStyle(color: AppColors.error, fontSize: 15, fontWeight: FontWeight.w600),
+        errorMaxLines: 3,
+        hintStyle: const TextStyle(color: AppColors.textSecondary, fontSize: 16),
       ),
     );
   }

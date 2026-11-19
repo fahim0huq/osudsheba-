@@ -98,7 +98,7 @@ class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
       {
         'icon': Icons.document_scanner_outlined,
         'selectedIcon': Icons.document_scanner_rounded,
-        'label': lang == 'bn' ? 'এআই স্ক্যান' : 'Scan AI',
+        'label': lang == 'bn' ? 'স্ক্যান' : 'Scan',
       },
       {
         'icon': Icons.analytics_outlined,
@@ -149,12 +149,21 @@ class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
               final tab = tabs[index];
 
               return Expanded(
-                child: GestureDetector(
+                child: Semantics(
+                  button: true,
+                  selected: isSelected,
+                  label: tab['label'] as String,
+                  excludeSemantics: true,
+                  child: GestureDetector(
                   onTap: () => _onTabTapped(index),
                   behavior: HitTestBehavior.opaque,
-                  child: Container(
-                    height: 56.0,
-                    alignment: Alignment.center,
+                  // At least 64 high, grows with larger text instead of clipping the label.
+                  // (Not Container(alignment:): that expands to all the height the bottom
+                  // bar is offered, i.e. the whole screen, leaving no room for the page.)
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 64.0),
+                    child: Center(
+                    heightFactor: 1.0,
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 220),
                       curve: Curves.easeInOutCubic,
@@ -189,7 +198,7 @@ class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
                               color: isSelected
                                   ? AppColors.primaryDark
                                   : AppColors.textSecondary,
-                              size: 22.0,
+                              size: 26.0,
                             ),
                           ),
                           const SizedBox(height: 3.0),
@@ -197,7 +206,7 @@ class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
                             duration: const Duration(milliseconds: 200),
                             curve: Curves.easeInOut,
                             style: TextStyle(
-                              fontSize: isSelected ? 11.0 : 10.5,
+                              fontSize: 13.0,
                               fontWeight: isSelected
                                   ? FontWeight.w700
                                   : FontWeight.w500,
@@ -215,6 +224,8 @@ class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
                         ],
                       ),
                     ),
+                    ),
+                  ),
                   ),
                 ),
               );

@@ -60,6 +60,43 @@ function unsubscribeConfirmed(result) {
     result.status === 'unsubscribed'; // local sandbox simulation
 }
 
+/**
+ * A plan saved as active is re-checked with AppsPro at most every RECHECK_MS when the app
+ * asks for status, so a number removed or unsubscribed outside the app (AppsPro dashboard,
+ * SMS STOP, operator) loses premium even if no webhook arrived. The live BDApps status by
+ * phone decides; without a phone, AppsPro's own record by subscriber id. If AppsPro cannot
+ * be reached the plan is kept, so paying users are not locked out by an outage.
+ */
+const RECHECK_MS = 15 * 60 * 1000;
+async function recheckWithAppsPro(uid, sub) {
+  const last = Date.parse(sub.lastVerifiedAt || '') || 0;
+  if (Date.now() - last < RECHECK_MS) return sub;
+  let status = null;
+  try {
+    if (sub.phone) {
+      const live = await AppsProService.getLiveStatusByPhone(sub.phone);
+      status = live?.subscription_status || live?.raw?.subscriptionStatus || null;
+    } else if (sub.appsproSubscriberId) {
+      const v = await AppsProService.getSubscriberStatus(sub.appsproSubscriberId);
+      status = v?.valid === false ? 'UNREGISTERED' : (v?.subscriber?.status || v?.status || null);
+    }
+  } catch (err) {
+    if (err.status === 404 && !sub.phone) {
+      status = 'UNREGISTERED'; // AppsPro has no such subscriber any more
+    } else {
+      console.warn(`[SubscriptionController] Re-check for ${uid} failed (${err.message}); keeping current plan.`);
+      return sub;
+    }
+  }
+  if (!status) return sub;
+  const { entitlementActive } = SubscriptionService.normalizeStatus(status);
+  if (entitlementActive) {
+    return SubscriptionService.saveSubscription(uid, {}); // still active: refresh lastVerifiedAt
+  }
+  console.log(`[SubscriptionController] Re-check: ${uid} is now ${status} at the operator; premium removed.`);
+  return SubscriptionService.saveSubscription(uid, { status });
+}
+
 class SubscriptionController {
   /**
    * GET /subscription/status and GET /appspro/subscription
@@ -68,6 +105,7 @@ class SubscriptionController {
     try {
       const uid = req.user.uid;
       let sub = await SubscriptionService.getSubscription(uid);
+      if (sub && sub.entitlementActive) sub = await recheckWithAppsPro(uid, sub);
 
       // If no active subscription for UID, check if user's phone has an active subscription (e.g., from website subscription portal)
       // Only the phone number Firebase verified at sign-in counts here, never one passed in

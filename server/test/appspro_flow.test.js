@@ -36,7 +36,8 @@ SubscriptionService.findSubscriptionByPhone = async (phone) =>
   Object.values(store).find((r) => r.phone === phone) || null;
 SubscriptionService.saveSubscription = async (uid, data) => {
   const merged = { ...(store[uid] || {}), ...data, uid };
-  const { entitlementActive } = SubscriptionService.normalizeStatus(merged.status);
+  const { status, entitlementActive } = SubscriptionService.normalizeStatus(merged.status);
+  merged.status = status; // like the real store
   merged.entitlementActive = entitlementActive;
   store[uid] = merged;
   return merged;
@@ -134,6 +135,33 @@ async function run() {
     const ok = await call(SubscriptionController.unsubscribe);
     eq(ok.status, 200, 'confirmed status');
     eq(store.u1.status, 'cancelled', 'cancelled');
+  });
+
+  await test('status re-checks an old active plan and removes premium when the operator says UNREGISTERED', async () => {
+    const old = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    store = { u1: { uid: 'u1', phone: '01812345678', status: 'active', entitlementActive: true, lastVerifiedAt: old } };
+    AppsProService.getLiveStatusByPhone = async () => ({ subscription_status: 'UNREGISTERED', status_code: 'S1000' });
+    const r = await call(SubscriptionController.getStatus);
+    eq(r.body.valid, false, 'valid');
+    eq(store.u1.status, 'cancelled', 'saved as cancelled');
+  });
+
+  await test('...keeps premium when the operator still says REGISTERED, or when AppsPro is unreachable', async () => {
+    const old = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    store = { u1: { uid: 'u1', phone: '01812345678', status: 'active', entitlementActive: true, lastVerifiedAt: old } };
+    AppsProService.getLiveStatusByPhone = async () => ({ subscription_status: 'REGISTERED' });
+    eq((await call(SubscriptionController.getStatus)).body.valid, true, 'registered');
+    store.u1.lastVerifiedAt = old;
+    AppsProService.getLiveStatusByPhone = async () => { const e = new Error('timeout'); e.status = 504; throw e; };
+    eq((await call(SubscriptionController.getStatus)).body.valid, true, 'outage');
+  });
+
+  await test('...and does not call AppsPro again within 15 minutes', async () => {
+    store = { u1: { uid: 'u1', phone: '01812345678', status: 'active', entitlementActive: true, lastVerifiedAt: new Date().toISOString() } };
+    let calls = 0;
+    AppsProService.getLiveStatusByPhone = async () => { calls++; return { subscription_status: 'UNREGISTERED' }; };
+    await call(SubscriptionController.getStatus);
+    eq(calls, 0, 'calls');
   });
 
   const { processEvent } = require('../webhooks/appspro.webhook');

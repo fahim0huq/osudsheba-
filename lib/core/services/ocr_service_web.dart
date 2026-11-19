@@ -1,5 +1,5 @@
 class OcrService {
   Future<String> extractTextFromImage(String imagePath) async {
-    throw Exception('Direct client-side Gemini calls are disabled. Web OCR must be routed through the backend.');
+    throw UnsupportedError('Prescription scanning works in the Android and iOS app only.');
   }
 }

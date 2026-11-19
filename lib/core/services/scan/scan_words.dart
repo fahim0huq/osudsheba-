@@ -1,0 +1,31 @@
+import '../../models/mock_models.dart';
+
+/// Words written before a medicine name that say its form: "Tab. Napa", "Syp. Fexo".
+final scanPrefixes = <String, MedicineForm>{
+  for (final w in const ['tab', 'tabs', 'tablet']) w: MedicineForm.tablet,
+  for (final w in const ['cap', 'caps', 'capsule']) w: MedicineForm.capsule,
+  for (final w in const ['syp', 'syr', 'syrup', 'susp', 'suspension']) w: MedicineForm.syrup,
+  for (final w in const ['inj', 'injection']) w: MedicineForm.injection,
+  for (final w in const ['drop', 'drops', 'gtt', 'ed', 'eye', 'ear']) w: MedicineForm.drops,
+};
+
+/// Common words on a prescription that must never be read as a medicine name.
+const scanStopwords = {
+  'rx', 'dr', 'name', 'age', 'sex', 'date', 'advice', 'diagnosis', 'mbbs', 'fcps', 'frcp', 'mrcp', 'bcs',
+  'health', 'patient', 'male', 'female', 'years', 'year', 'yrs', 'days', 'day', 'month', 'months', 'week',
+  'weeks', 'before', 'after', 'meal', 'meals', 'food', 'daily', 'once', 'twice', 'thrice', 'times', 'time',
+  'morning', 'night', 'noon', 'with', 'and', 'the', 'for', 'continue', 'cont', 'next', 'visit', 'follow',
+  'hospital', 'clinic', 'chamber', 'phone', 'mobile', 'address', 'weight', 'pulse', 'test', 'tests',
+  'investigation', 'medicine', 'medicines', 'dose', 'mg', 'ml', 'mcg', 'gm', 'sos', 'prn', 'empty',
+  'stomach', 'water', 'reg', 'signature', 'consultant', 'professor', 'medical', 'college', 'specialist',
+  'department', 'bangladesh', 'dhaka', 'road', 'house', 'floor',
+};
+
+/// Words printed on medicine packets that are never the medicine's name.
+const packetWords = {
+  'each', 'contains', 'film', 'coated', 'store', 'keep', 'reach', 'children', 'manufactured', 'mfg', 'exp',
+  'batch', 'price', 'mrp', 'bp', 'usp', 'use', 'only', 'prescription', 'registered', 'trademark', 'dar', 'lic',
+  'protect', 'light', 'moisture', 'below', 'temperature', 'dry', 'place', 'strip', 'blister', 'pack', 'oral',
+  'dosage', 'direction', 'physician', 'retail', 'vat', 'including', 'net', 'sugar', 'free', 'delayed',
+  'release', 'extended',
+};

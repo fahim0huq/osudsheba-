@@ -3,528 +3,219 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/constants/app_colors.dart';
-import '../../../core/models/mock_models.dart';
 import '../../../core/services/mock_data_service.dart';
+import '../../../core/services/scan/prescription_text_parser.dart';
+import '../../../core/utils/time_utils.dart';
 import '../../../shared/widgets/app_primary_button.dart';
 import '../../../shared/widgets/app_secondary_button.dart';
-import '../../../shared/widgets/fade_slide_in.dart';
+import '../../../shared/widgets/confirm_dialog.dart';
+import 'widgets/scan_draft_card.dart';
+import 'widgets/scan_draft_editor.dart';
 
+/// Shows the medicines found on a scanned prescription. Nothing is saved until the
+/// person has checked them against the paper and confirmed.
 class AiPrescriptionReviewScreen extends ConsumerStatefulWidget {
   final String? ocrText;
-  final List<Medicine>? draftMedicines;
-  final bool isFallback;
+  final List<ScanDraft>? drafts;
 
-  const AiPrescriptionReviewScreen({
-    super.key,
-    this.ocrText,
-    this.draftMedicines,
-    this.isFallback = false,
-  });
+  /// 'scan' (read from a prescription), 'packets' (read from medicine packets) or
+  /// 'typed' (entered by the person while looking at the photo).
+  final String source;
+
+  const AiPrescriptionReviewScreen({super.key, this.ocrText, this.drafts, this.source = 'scan'});
 
   @override
   ConsumerState<AiPrescriptionReviewScreen> createState() => _AiPrescriptionReviewScreenState();
 }
 
 class _AiPrescriptionReviewScreenState extends ConsumerState<AiPrescriptionReviewScreen> {
-  late List<Medicine> _extractedMedicines;
-  bool _showOcrText = false;
+  late final List<ScanDraft> _drafts = List.of(widget.drafts ?? const []);
 
-  @override
-  void initState() {
-    super.initState();
-    _extractedMedicines = widget.draftMedicines != null
-        ? List.from(widget.draftMedicines!)
-        : [];
+  Future<void> _edit(int index, bool bn) async {
+    final updated = await editScanDraft(context, _drafts[index], bn);
+    if (updated != null && mounted) setState(() => _drafts[index] = updated);
   }
 
-  void _editMedicine(int index) async {
-    final med = _extractedMedicines[index];
-    final nameController = TextEditingController(text: med.name);
-    final strengthController = TextEditingController(text: med.strength);
-    final doseController = TextEditingController(text: med.dose);
-    final timesController = TextEditingController(text: med.times.join(', '));
-    String selectedMealRelation = med.mealRelation;
-    MedicineForm selectedForm = med.form;
+  Future<void> _confirm(bool bn) async {
+    final unreadable = _drafts
+        .where((d) => d.medicine.times.isEmpty || invalidTimes(d.medicine.times).isNotEmpty)
+        .map((d) => d.medicine.name)
+        .toList();
+    if (unreadable.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            bn
+                ? 'এই ওষুধগুলোর সময় ঠিক করুন: ${unreadable.join(', ')}'
+                : 'Please fix the reminder times for: ${unreadable.join(', ')}',
+          ),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+    final ok = await showConfirmDialog(
+      context,
+      title: bn ? 'সব তথ্য মিলিয়ে দেখেছেন?' : 'Have you checked everything?',
+      message: bn
+          ? 'ফোন ভুল পড়তে পারে, বিশেষ করে হাতের লেখা। প্রতিটি ওষুধের নাম, মাত্রা ও সময় কাগজের প্রেসক্রিপশনের সাথে মিলিয়ে দেখুন। সন্দেহ থাকলে ডাক্তার বা ফার্মাসিস্টকে জিজ্ঞেস করুন।'
+          : 'The phone can misread prescriptions, especially handwriting. Check each medicine name, strength, dose and time against the paper prescription. If unsure, ask your doctor or pharmacist.',
+      confirmLabel: bn ? 'হ্যাঁ, মিলিয়ে দেখেছি — সংরক্ষণ' : 'Yes, I checked — save',
+      cancelLabel: bn ? 'আবার দেখি' : 'Let me check again',
+      destructive: false,
+      icon: Icons.fact_check_rounded,
+    );
+    if (!ok || !mounted) return;
+    for (final d in _drafts) {
+      ref
+          .read(medicinesProvider.notifier)
+          .addMedicine(d.medicine.copyWith(id: const Uuid().v4(), status: 'active', createdAt: DateTime.now()));
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(bn ? 'ওষুধ সূচি তৈরি করা হয়েছে' : 'Schedule created successfully!'),
+        backgroundColor: AppColors.success,
+      ),
+    );
+    context.go('/home');
+  }
 
-    final durationDays = med.endDate != null && med.startDate != null
-        ? med.endDate!.difference(med.startDate!).inDays
-        : 7;
-    final durationController = TextEditingController(text: durationDays.toString());
-
-    await showDialog(
+  void _showText(bool bn) {
+    showModalBottomSheet<void>(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Edit Extracted Medicine'),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-               children: [
-                 TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Name')),
-                 const SizedBox(height: 8),
-                 TextField(controller: strengthController, decoration: const InputDecoration(labelText: 'Strength')),
-                 const SizedBox(height: 8),
-                 DropdownButtonFormField<MedicineForm>(
-                   initialValue: selectedForm,
-                   decoration: const InputDecoration(labelText: 'Form'),
-                   items: MedicineForm.values
-                       .map((val) => DropdownMenuItem(
-                           value: val,
-                           child: Text(val.name[0].toUpperCase() + val.name.substring(1))))
-                       .toList(),
-                   onChanged: (val) {
-                     if (val != null) {
-                       setDialogState(() {
-                         selectedForm = val;
-                       });
-                     }
-                   },
-                 ),
-                 const SizedBox(height: 8),
-                 TextField(controller: doseController, decoration: const InputDecoration(labelText: 'Dose Amount')),
-                 const SizedBox(height: 8),
-                 TextField(
-                   controller: timesController,
-                   decoration: const InputDecoration(labelText: 'Reminder Times (comma separated)'),
-                 ),
-                 const SizedBox(height: 8),
-                 TextField(
-                   controller: durationController,
-                   decoration: const InputDecoration(labelText: 'Duration (days)'),
-                   keyboardType: TextInputType.number,
-                 ),
-                 const SizedBox(height: 12),
-                 DropdownButtonFormField<String>(
-                   initialValue: ['Before Meal', 'After Meal', 'With Meal', 'None'].contains(selectedMealRelation)
-                       ? selectedMealRelation
-                       : 'After Meal',
-                   decoration: const InputDecoration(labelText: 'Meal Relation'),
-                   items: ['Before Meal', 'After Meal', 'With Meal', 'None']
-                       .map((val) => DropdownMenuItem(value: val, child: Text(val)))
-                       .toList(),
-                   onChanged: (val) {
-                     if (val != null) {
-                       setDialogState(() {
-                         selectedMealRelation = val;
-                       });
-                     }
-                   },
-                 ),
-               ],
-             ),
-           ),
-           actions: [
-             TextButton(
-                 onPressed: () => Navigator.pop(context),
-                 child: const Text('Cancel', style: TextStyle(color: AppColors.textSecondary))),
-             TextButton(
-               onPressed: () {
-                 final List<String> parsedTimes = timesController.text
-                     .split(',')
-                     .map((e) => e.trim())
-                     .where((e) => e.isNotEmpty)
-                     .toList();
-                 final days = int.tryParse(durationController.text) ?? 7;
-                 final now = DateTime.now();
-                 final start = med.startDate ?? now;
-                 final end = start.add(Duration(days: days));
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: SelectableText(
+            (widget.ocrText ?? '').trim().isEmpty
+                ? (bn ? 'কোনো লেখা পড়া যায়নি।' : 'No text was read.')
+                : widget.ocrText!,
+            style: TextStyle(fontFamily: 'monospace', fontSize: 13.0, color: Colors.grey.shade800),
+          ),
+        ),
+      ),
+    );
+  }
 
-                 setState(() {
-                   _extractedMedicines[index] = med.copyWith(
-                     name: nameController.text,
-                     strength: strengthController.text,
-                     form: selectedForm,
-                     dose: doseController.text,
-                     times: parsedTimes.isNotEmpty ? parsedTimes : med.times,
-                     mealRelation: selectedMealRelation,
-                     startDate: start,
-                     endDate: end,
-                   );
-                 });
-                 Navigator.pop(context);
-               },
-               child: const Text('Save', style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
-             ),
-           ],
-         ),
-       ),
-     );
-   }
+  String _notice(bool bn, int needCheck) {
+    final more = needCheck == 0
+        ? ''
+        : (bn ? ' হলুদ চিহ্নিত $needCheckটি অবশ্যই দেখুন।' : ' Check the $needCheck marked in yellow.');
+    switch (widget.source) {
+      case 'typed':
+        return bn
+            ? 'সংরক্ষণের আগে প্রতিটি ওষুধ আরেকবার কাগজের প্রেসক্রিপশনের সাথে মিলিয়ে নিন।'
+            : 'Before saving, check each medicine once more against the paper prescription.';
+      case 'packets':
+        return bn
+            ? 'প্যাকেট থেকে ওষুধের নাম পাওয়া গেছে। প্যাকেটে কখন খাবেন লেখা থাকে না: প্রতিটিতে ✎ চেপে প্রেসক্রিপশন অনুযায়ী সময় ও দিন দিন।'
+            : 'Medicine names were found on the packets. Packets do not say when to take them: tap ✎ on each and set the times and days from the prescription.';
+      default:
+        return bn
+            ? 'ফোন প্রেসক্রিপশন পড়ে বাংলাদেশের ওষুধের তালিকার সাথে মিলিয়েছে। ভুল হতে পারে: প্রতিটি ওষুধ কাগজের সাথে মিলিয়ে নিন।$more'
+            : 'The phone read the prescription and matched it to a list of Bangladeshi medicines. It can be wrong: check each one against the paper.$more';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final settings = ref.watch(appSettingsProvider);
-    final lang = settings.language;
-
-    final title = lang == 'bn' ? 'এআই পর্যালোচনা' : 'AI Review';
+    final bn = ref.watch(appSettingsProvider).language == 'bn';
+    final needCheck = _drafts.where((d) => d.needsCheck).length;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(title),
+        title: Text(bn ? 'স্ক্যান মিলিয়ে দেখুন' : 'Check the scan'),
         backgroundColor: Colors.transparent,
         foregroundColor: AppColors.textPrimary,
         elevation: 0,
         scrolledUnderElevation: 0,
+        actions: [
+          if (widget.ocrText != null)
+            TextButton.icon(
+              onPressed: () => _showText(bn),
+              icon: const Icon(Icons.description_rounded, size: 18),
+              label: Text(bn ? 'পড়া লেখা' : 'Read text'),
+            ),
+        ],
       ),
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 10.0),
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              FadeSlideIn(
-                child: Text(
-                  lang == 'bn' ? 'প্রেসক্রিপশন এআই পর্যালোচনা' : 'AI Prescription Review',
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                        color: AppColors.primaryDark,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 20.0,
-                      ),
+              Container(
+                padding: const EdgeInsets.all(10.0),
+                decoration: BoxDecoration(
+                  color: AppColors.error.withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(12.0),
+                  border: Border.all(color: AppColors.error.withValues(alpha: 0.25)),
                 ),
-              ),
-              const SizedBox(height: 6.0),
-              FadeSlideIn(
-                delay: const Duration(milliseconds: 100),
-                child: Text(
-                  lang == 'bn'
-                      ? 'শনাক্ত করা ওষুধগুলো পর্যালোচনা করুন। সংরক্ষণ করার পূর্বে প্রয়োজনে তথ্য সংশোধন করুন।'
-                      : 'Please review the extracted medicines below. You can modify any drafts before saving.',
-                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 14.5, height: 1.3),
-                ),
-              ),
-              const SizedBox(height: 12.0),
-              if (widget.isFallback)
-                FadeSlideIn(
-                  delay: const Duration(milliseconds: 120),
-                  child: Container(
-                    padding: const EdgeInsets.all(14.0),
-                    decoration: BoxDecoration(
-                      color: AppColors.error.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(16.0),
-                      border: Border.all(color: AppColors.error.withValues(alpha: 0.2), width: 1.0),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Icon(Icons.warning_amber_rounded, color: AppColors.error, size: 22.0),
-                        const SizedBox(width: 10.0),
-                        Expanded(
-                          child: Text(
-                            lang == 'bn'
-                                ? 'ডেমো ডাটা প্রদর্শিত হচ্ছে: প্রেসক্রিপশন স্ক্যানটি অস্পষ্ট ছিল। নিচে ওষুধগুলোর তথ্য খুব সতর্কতার সাথে যাচাই করে সেভ করুন।'
-                                : 'Showing Demo Fallback Data: The prescription scan was unsuccessful or incomplete. Please review and edit the medicines below carefully before saving.',
-                            style: const TextStyle(
-                              fontSize: 13.0,
-                              color: AppColors.error,
-                              fontWeight: FontWeight.bold,
-                              height: 1.4,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              const SizedBox(height: 16.0),
-
-              // Expanding Raw OCR Text Card
-              FadeSlideIn(
-                delay: const Duration(milliseconds: 150),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16.0),
-                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.2), width: 1.0),
-                  ),
-                  child: Column(
-                    children: [
-                      ListTile(
-                        dense: true,
-                        leading: const Icon(Icons.description_rounded, color: AppColors.primary),
-                        title: Text(
-                          lang == 'bn' ? 'প্রেসক্রিপশনের মূল লেখা দেখুন' : 'View Extracted Text',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        trailing: Icon(
-                          _showOcrText ? Icons.expand_less : Icons.expand_more,
-                          color: AppColors.primary,
-                        ),
-                        onTap: () {
-                          setState(() {
-                            _showOcrText = !_showOcrText;
-                          });
-                        },
-                      ),
-                      if (_showOcrText)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16.0, 0.0, 16.0, 16.0),
-                          child: Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(12.0),
-                            decoration: BoxDecoration(
-                              color: Colors.grey.shade50,
-                              borderRadius: BorderRadius.circular(12.0),
-                              border: Border.all(color: Colors.grey.shade200),
-                            ),
-                            child: Text(
-                              widget.ocrText ??
-                                  (lang == 'bn'
-                                      ? 'কোন ওসিআর টেক্সট উপলব্ধ নেই। ডেমো ডাটা প্রদর্শিত হচ্ছে।'
-                                      : 'No OCR text available. Demo data is being shown.'),
-                              style: TextStyle(
-                                fontFamily: 'monospace',
-                                fontSize: 12.0,
-                                color: Colors.grey.shade800,
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12.0),
-
-              // Safety Warning Panel
-              FadeSlideIn(
-                delay: const Duration(milliseconds: 200),
-                child: Container(
-                  padding: const EdgeInsets.all(14.0),
-                  decoration: BoxDecoration(
-                    color: AppColors.error.withValues(alpha: 0.06),
-                    borderRadius: BorderRadius.circular(16.0),
-                    border: Border.all(color: AppColors.error.withValues(alpha: 0.25)),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Padding(
-                        padding: EdgeInsets.only(top: 2.0),
-                        child: Icon(Icons.warning_amber_rounded, color: AppColors.error, size: 20.0),
-                      ),
-                      const SizedBox(width: 10.0),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              lang == 'bn'
-                                  ? 'এআই ভুল করতে পারে। ওষুধ খাওয়ার মাত্রা এবং সময় পুনরায় নিশ্চিত হয়ে নিন।'
-                                  : 'AI can make mistakes. Please verify medicine name, dose, frequency, timing, and duration before saving.',
-                              style: TextStyle(
-                                fontSize: 12.0,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.red.shade900,
-                              ),
-                            ),
-                            const SizedBox(height: 4.0),
-                            Text(
-                              lang == 'bn'
-                                  ? 'এটি শুধুমাত্র একটি রিমাইন্ডার টুল এবং কোনো চিকিৎসা পরামর্শ প্রদান করে না। কোনো বিষয় নিয়ে দ্বিমত থাকলে চিকিৎসকের পরামর্শ নিন।'
-                                  : 'This app is a medication reminder tool and does not provide medical advice. If unsure, consult your doctor or pharmacist.',
-                              style: TextStyle(
-                                fontSize: 11.0,
-                                color: Colors.red.shade800,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16.0),
-
-              // Extracted list
-              Expanded(
-                child: _extractedMedicines.isEmpty
-                    ? FadeSlideIn(
-                        delay: const Duration(milliseconds: 250),
-                        child: Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const Icon(Icons.search_off_rounded, size: 48, color: AppColors.border),
-                              const SizedBox(height: 12.0),
-                              Text(
-                                lang == 'bn'
-                                    ? 'কোনো ওষুধ শনাক্ত করা যায়নি।'
-                                    : 'No medicines to review.',
-                                style: const TextStyle(color: AppColors.textSecondary),
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
-                    : FadeSlideIn(
-                        delay: const Duration(milliseconds: 250),
-                        child: ListView.builder(
-                          physics: const BouncingScrollPhysics(),
-                          itemCount: _extractedMedicines.length,
-                          itemBuilder: (context, index) {
-                            final med = _extractedMedicines[index];
-                            // Calculate duration in days
-                            final durationDays = med.endDate != null && med.startDate != null
-                                ? med.endDate!.difference(med.startDate!).inDays
-                                : 7;
-
-                            final isLowConfidence = med.name.toLowerCase() == 'unclear' ||
-                                med.instruction.contains('[Low confidence');
-
-                            return Container(
-                              margin: const EdgeInsets.only(bottom: 10.0),
-                              padding: const EdgeInsets.all(14.0),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(16.0),
-                                border: Border.all(
-                                  color: isLowConfidence ? AppColors.warning : AppColors.border,
-                                  width: isLowConfidence ? 1.5 : 1.0,
-                                ),
-                              ),
-                              child: Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(8.0),
-                                    decoration: const BoxDecoration(
-                                      color: AppColors.primaryLight,
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: Icon(med.form.icon, color: AppColors.primary, size: 20.0),
-                                  ),
-                                  const SizedBox(width: 14.0),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          '${med.name} ${med.strength}',
-                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15.0, color: AppColors.textPrimary),
-                                        ),
-                                        const SizedBox(height: 2.0),
-                                        Text(
-                                          'Dose: ${med.dose} • ${med.mealRelation} • $durationDays days',
-                                          style: const TextStyle(fontSize: 12.0, color: AppColors.textSecondary, fontWeight: FontWeight.w500),
-                                        ),
-                                        const SizedBox(height: 2.0),
-                                        Text(
-                                          'Times: ${med.times.join(", ")}',
-                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12.0, color: AppColors.primaryDark),
-                                        ),
-                                        if (med.instruction.isNotEmpty) ...[
-                                          const SizedBox(height: 2.0),
-                                          Text(
-                                            'Original: ${med.instruction}',
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(fontSize: 11.0, fontStyle: FontStyle.italic, color: Colors.grey.shade500),
-                                          ),
-                                        ],
-                                        if (isLowConfidence) ...[
-                                          const SizedBox(height: 6.0),
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
-                                            decoration: BoxDecoration(
-                                              color: AppColors.warning.withValues(alpha: 0.08),
-                                              borderRadius: BorderRadius.circular(6.0),
-                                              border: Border.all(color: AppColors.warning.withValues(alpha: 0.2)),
-                                            ),
-                                            child: Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                const Icon(Icons.warning_amber_rounded, color: AppColors.warning, size: 14.0),
-                                                const SizedBox(width: 4.0),
-                                                Text(
-                                                  lang == 'bn'
-                                                      ? '⚠ তথ্যটি নিশ্চিত করুন'
-                                                      : '⚠ Please verify this information',
-                                                  style: const TextStyle(
-                                                    color: AppColors.warning,
-                                                    fontSize: 11.0,
-                                                    fontWeight: FontWeight.bold,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ],
-                                      ],
-                                    ),
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.edit_rounded, color: AppColors.primary, size: 20.0),
-                                    onPressed: () => _editMedicine(index),
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.delete_outline_rounded, color: AppColors.error, size: 20.0),
-                                    onPressed: () {
-                                      setState(() {
-                                        _extractedMedicines.removeAt(index);
-                                      });
-                                    },
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-              ),
-
-              const SizedBox(height: 12.0),
-              FadeSlideIn(
-                delay: const Duration(milliseconds: 300),
                 child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    const Icon(Icons.warning_amber_rounded, color: AppColors.error, size: 20.0),
+                    const SizedBox(width: 8.0),
                     Expanded(
-                      child: AppSecondaryButton(
-                        text: lang == 'bn' ? 'ম্যানুয়ালি লিখুন' : 'Enter Manually',
-                        icon: Icons.edit_note_rounded,
-                        onPressed: () => context.push('/add-medicine'),
-                      ),
-                    ),
-                    const SizedBox(width: 12.0),
-                    Expanded(
-                      child: AppPrimaryButton(
-                        text: lang == 'bn' ? 'নিশ্চিত ও সংরক্ষণ' : 'Confirm Schedule',
-                        icon: Icons.check_circle_outline_rounded,
-                        onPressed: _extractedMedicines.isNotEmpty
-                            ? () {
-                                try {
-                                  for (final med in _extractedMedicines) {
-                                    final savedMed = med.copyWith(
-                                      id: const Uuid().v4(),
-                                      status: 'active',
-                                      createdAt: DateTime.now(),
-                                    );
-                                    ref.read(medicinesProvider.notifier).addMedicine(savedMed);
-                                  }
-
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(lang == 'bn' ? 'ওষুধ সূচি তৈরি করা হয়েছে' : 'Schedule created successfully!'),
-                                      backgroundColor: AppColors.success,
-                                    ),
-                                  );
-                                  context.go('/home');
-                                } catch (e) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(lang == 'bn' ? 'সংরক্ষণ ব্যর্থ হয়েছে' : 'Failed to save medicine schedule.'),
-                                      backgroundColor: AppColors.error,
-                                    ),
-                                  );
-                                }
-                              }
-                            : null,
+                      child: Text(
+                        _notice(bn, needCheck),
+                        style: TextStyle(fontSize: 13.0, color: Colors.red.shade900, height: 1.3),
                       ),
                     ),
                   ],
                 ),
               ),
               const SizedBox(height: 10.0),
+              Expanded(
+                child: _drafts.isEmpty
+                    ? Center(
+                        child: Text(
+                          bn
+                              ? 'কোনো ওষুধ চেনা যায়নি। আরও স্পষ্ট ছবি তুলুন বা নিজে লিখুন।'
+                              : 'No medicines recognised. Try a clearer photo or enter them yourself.',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: AppColors.textSecondary),
+                        ),
+                      )
+                    : ListView.builder(
+                        itemCount: _drafts.length,
+                        itemBuilder: (context, i) => ScanDraftCard(
+                          draft: _drafts[i],
+                          bn: bn,
+                          onEdit: () => _edit(i, bn),
+                          onDelete: () => setState(() => _drafts.removeAt(i)),
+                        ),
+                      ),
+              ),
+              Text(
+                bn
+                    ? 'ওষুধের তালিকা: Rahman ও Khan (2024), Mendeley Data, CC BY 4.0'
+                    : 'Medicine list: Rahman & Khan (2024), Mendeley Data, CC BY 4.0',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 11.0, color: AppColors.textSecondary),
+              ),
+              const SizedBox(height: 8.0),
+              Row(
+                children: [
+                  Expanded(
+                    child: AppSecondaryButton(
+                      text: bn ? 'নিজে লিখুন' : 'Add manually',
+                      icon: Icons.edit_note_rounded,
+                      onPressed: () => context.push('/add-medicine'),
+                    ),
+                  ),
+                  const SizedBox(width: 10.0),
+                  Expanded(
+                    child: AppPrimaryButton(
+                      text: bn ? 'নিশ্চিত ও সংরক্ষণ' : 'Confirm & save',
+                      icon: Icons.check_circle_outline_rounded,
+                      onPressed: _drafts.isNotEmpty ? () => _confirm(bn) : null,
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
         ),

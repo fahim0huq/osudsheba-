@@ -197,24 +197,35 @@ async function processEvent(eventType, payload) {
   const now = new Date().toISOString();
 
   switch (eventType) {
-    case 'subscriber.created': {
-      console.log(`[Webhook] Subscription CREATED for user ${targetUid}`);
-      await SubscriptionService.saveSubscription(targetUid, {
-        status: 'active',
-        appsproSubscriberId: subscriberId,
-        phone: phone,
-        frequency: data.frequency || 'daily',
-        subscribedAt: data.created_at || now,
-      });
-      break;
-    }
-
+    // The AppsPro dashboard describes subscriber.created as "when user requests OTP" (the docs
+    // say REGISTERED), so the event name alone never grants premium: the subscriber's own
+    // status decides. subscriber.verified ("user completes subscription") and
+    // subscriber.reactivated are confirmations, so they grant when no status is sent.
+    case 'subscriber.created':
+    case 'subscriber.verified':
     case 'subscriber.reactivated': {
-      console.log(`[Webhook] Subscription REACTIVATED for user ${targetUid}`);
+      const sentStatus = data.status || data.subscription_status || null;
+      if (!sentStatus && eventType === 'subscriber.created') {
+        console.log(`[Webhook] ${eventType} without a status for user ${targetUid}: not granting (OTP requested only).`);
+        break;
+      }
+      const status = sentStatus || 'active';
+      const { status: normalized, entitlementActive } = SubscriptionService.normalizeStatus(status);
+      if (eventType === 'subscriber.created' && !entitlementActive) {
+        // Do not overwrite a working plan with an early "pending" from a new OTP request.
+        const existing = await SubscriptionService.getSubscription(targetUid);
+        if (existing && existing.entitlementActive) {
+          console.log(`[Webhook] ${eventType} (${status}) ignored for ${targetUid}: already active.`);
+          break;
+        }
+      }
+      console.log(`[Webhook] ${eventType} (${status} -> ${normalized}) for user ${targetUid}`);
       await SubscriptionService.saveSubscription(targetUid, {
-        status: 'active',
+        status,
         appsproSubscriberId: subscriberId,
-        cancelledAt: null,
+        ...(phone ? { phone } : {}),
+        frequency: data.frequency || 'daily',
+        ...(entitlementActive ? { subscribedAt: data.subscribed_at || data.created_at || now, cancelledAt: null } : {}),
       });
       break;
     }
@@ -260,4 +271,5 @@ async function processEvent(eventType, payload) {
 module.exports = {
   handleAppsProWebhook,
   timingSafeCompare,
+  processEvent, // tests
 };

@@ -136,6 +136,32 @@ async function run() {
     eq(store.u1.status, 'cancelled', 'cancelled');
   });
 
+  const { processEvent } = require('../webhooks/appspro.webhook');
+
+  await test('webhook: subscriber.created at OTP request does not grant premium', async () => {
+    store = {};
+    await processEvent('subscriber.created', { data: { external_user_id: 'w1', subscriber_id: 'tel:8801812345678' } });
+    eq(store.w1, undefined, 'no status -> nothing saved');
+    await processEvent('subscriber.created', { data: { external_user_id: 'w1', status: 'PENDING' } });
+    eq(store.w1.entitlementActive, false, 'pending -> locked');
+  });
+
+  await test('webhook: REGISTERED or subscriber.verified grants premium', async () => {
+    store = {};
+    await processEvent('subscriber.created', { data: { external_user_id: 'w2', status: 'REGISTERED' } });
+    eq(store.w2.entitlementActive, true, 'created REGISTERED');
+    await processEvent('subscriber.verified', { data: { external_user_id: 'w3' } });
+    eq(store.w3.entitlementActive, true, 'verified');
+  });
+
+  await test('webhook: a new OTP request does not lock an already active plan', async () => {
+    store = { w4: { uid: 'w4', status: 'active', entitlementActive: true } };
+    await processEvent('subscriber.created', { data: { external_user_id: 'w4', status: 'PENDING' } });
+    eq(store.w4.status, 'active', 'still active');
+    await processEvent('subscriber.cancelled', { data: { external_user_id: 'w4' } });
+    eq(store.w4.status, 'cancelled', 'cancel works');
+  });
+
   console.log(`\nTEST SUMMARY: ${passed} PASSED, ${failed} FAILED\n`);
   process.exit(failed ? 1 : 0);
 }

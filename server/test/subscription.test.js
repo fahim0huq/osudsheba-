@@ -140,6 +140,7 @@ async function runTests() {
       subscriber_id: 'sub_test_123',
       phone: '01812345678',
       created_at: new Date().toISOString(),
+      data: { status: 'REGISTERED', frequency: 'daily' }, // documented envelope
     };
     const validReq = createSignedWebhookRequest(validPayload, { eventId: validEventId, eventType: 'subscriber.created' });
     const res1 = await sendHttpRequest('/webhooks/appspro', 'POST', validReq.headers, validReq.rawBody);

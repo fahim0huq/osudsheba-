@@ -27,6 +27,39 @@ function normalizeBangladeshPhone(phone) {
   return null;
 }
 
+/** The signed-in user's phone number as verified by Firebase phone sign-in, or null. */
+function verifiedPhone(req) {
+  return normalizeBangladeshPhone(req.user?.phone_number || req.user?.phoneNumber || '');
+}
+
+/** "tel:8801712345678" -> "01712345678" (BDApps ids can also be masked; then null). */
+function phoneFromSubscriberId(subscriberId) {
+  const m = /^tel:(?:\+?880)(1\d{9})$/.exec(String(subscriberId || ''));
+  return m ? `0${m[1]}` : null;
+}
+
+/**
+ * OTP references this server handed out, bound to the user who asked and the phone the OTP
+ * went to. Verify uses this phone (never one sent by the app), so a subscription can only be
+ * saved for, and later cancelled on, the number that received the OTP.
+ */
+const OTP_TTL_MS = 30 * 60 * 1000;
+const pendingOtps = new Map();
+function rememberOtp(referenceNo, uid, phone) {
+  const now = Date.now();
+  for (const [ref, v] of pendingOtps) if (v.expiresAt < now) pendingOtps.delete(ref);
+  pendingOtps.set(String(referenceNo), { uid, phone, expiresAt: now + OTP_TTL_MS });
+}
+
+/** AppsPro unsubscribe succeeded only on S1000 or an UNREGISTERED status (per the AppsPro docs). */
+function unsubscribeConfirmed(result) {
+  if (!result || typeof result !== 'object') return false;
+  const code = result.status_code || result.statusCode;
+  const status = result.raw?.subscriptionStatus || result.subscription_status || result.status;
+  return code === 'S1000' || String(status || '').toUpperCase() === 'UNREGISTERED' ||
+    result.status === 'unsubscribed'; // local sandbox simulation
+}
+
 class SubscriptionController {
   /**
    * GET /subscription/status and GET /appspro/subscription
@@ -37,9 +70,10 @@ class SubscriptionController {
       let sub = await SubscriptionService.getSubscription(uid);
 
       // If no active subscription for UID, check if user's phone has an active subscription (e.g., from website subscription portal)
-      if ((!sub || !sub.entitlementActive) && (req.user.phone_number || req.user.phoneNumber || req.query.phone)) {
-        const userPhone = req.user.phone_number || req.user.phoneNumber || req.query.phone;
-        const normalizedPhone = normalizeBangladeshPhone(userPhone);
+      // Only the phone number Firebase verified at sign-in counts here, never one passed in
+      // the request: otherwise anyone could attach (and then cancel) someone else's plan.
+      if (!sub || !sub.entitlementActive) {
+        const normalizedPhone = verifiedPhone(req);
         if (normalizedPhone) {
           const phoneSub = await SubscriptionService.findSubscriptionByPhone(normalizedPhone);
           if (phoneSub && phoneSub.entitlementActive) {
@@ -156,7 +190,22 @@ class SubscriptionController {
         (result.message || '').toLowerCase().includes('already registered');
 
       if (isAlreadyRegistered) {
-        console.log(`[SubscriptionController] Phone ${maskPhone(normalizedPhone)} is already registered. Granting entitlement to user ${uid}`);
+        // No OTP is sent for a number that is already subscribed, so nothing proves this user
+        // owns it. Grant it only if Firebase verified this number at sign-in, or it is already
+        // this user's own subscription. Otherwise anyone could type a subscribed number, get
+        // premium for free, and then cancel the real owner's plan with "Unsubscribe".
+        const own = await SubscriptionService.getSubscription(uid);
+        const ownsNumber = verifiedPhone(req) === normalizedPhone || Boolean(own && own.phone === normalizedPhone);
+        if (!ownsNumber) {
+          console.warn(`[SubscriptionController] ${maskPhone(normalizedPhone)} is already subscribed but not proven to belong to ${uid}.`);
+          return res.status(409).json({
+            success: false,
+            error: 'ALREADY_SUBSCRIBED_ELSEWHERE',
+            message: 'এই নম্বরে আগে থেকেই সাবস্ক্রিপশন চালু আছে। এই নম্বর দিয়ে (ফোন নম্বরে) লগইন করলে প্রিমিয়াম পাবেন।',
+            messageEn: 'This number already has a subscription. Sign in with this phone number to use it.',
+          });
+        }
+        console.log(`[SubscriptionController] Phone ${maskPhone(normalizedPhone)} is already registered to ${uid}. Granting entitlement.`);
         const savedRecord = await SubscriptionService.saveSubscription(uid, {
           status: 'active',
           phone: normalizedPhone,
@@ -179,6 +228,20 @@ class SubscriptionController {
       }
 
       const refNo = result.reference_no || result.referenceNo || result.ref_id || result.data?.reference_no;
+      const code = result.status_code || result.statusCode;
+      // AppsPro can answer HTTP 200 with an error code (e.g. E13xx) and no reference: no OTP
+      // was sent, so do not tell the user to wait for one.
+      if (!refNo || (code && String(code).startsWith('E'))) {
+        console.warn(`[SubscriptionController] OTP not sent for ${maskPhone(normalizedPhone)}: ${code} ${result.status_detail || ''}`);
+        return res.status(502).json({
+          success: false,
+          error: 'OTP_NOT_SENT',
+          status_code: code || null,
+          message: 'ওটিপি পাঠানো যায়নি। কিছুক্ষণ পরে আবার চেষ্টা করুন।',
+          messageEn: `Could not send the OTP${result.status_detail ? ` (${result.status_detail})` : ''}. Please try again later.`,
+        });
+      }
+      rememberOtp(refNo, uid, normalizedPhone);
 
       return res.status(200).json({
         success: true,
@@ -206,7 +269,6 @@ class SubscriptionController {
       const uid = req.user.uid;
       const referenceNo = req.body.referenceNo || req.body.reference_no;
       const otp = req.body.otp;
-      const phone = req.body.phone;
 
       if (!referenceNo || !otp) {
         return res.status(400).json({
@@ -216,8 +278,17 @@ class SubscriptionController {
         });
       }
 
+      const pending = pendingOtps.get(String(referenceNo));
+      if (pending && pending.uid !== uid) {
+        return res.status(403).json({
+          success: false,
+          error: 'OTP_REFERENCE_NOT_YOURS',
+          message: 'This OTP was requested from another account. Please request a new OTP.',
+        });
+      }
+
       // Call AppsPro OTP verification
-      const result = await AppsProService.verifyOtp(referenceNo, otp.trim(), uid);
+      const result = await AppsProService.verifyOtp(referenceNo, String(otp).trim(), uid);
 
       // Inspect subscription status from AppsPro
       // In AppsPro: status may be 'REGISTERED', 'ACTIVE', 'PENDING', 'INITIAL CHARGING PENDING'
@@ -225,7 +296,11 @@ class SubscriptionController {
       const subscriberId = result.subscriber_id || result.subscriberId || result.data?.subscriber_id || null;
       const localSubscriberId = result.local_subscriber_id || result.id || null;
       const frequency = result.frequency || result.plan?.frequency || 'daily';
-      const subscriberPhone = result.phone || (phone ? normalizeBangladeshPhone(phone) : null);
+      // The number the OTP went to (remembered at request time), else the one inside the
+      // BDApps subscriber id. Never a number sent by the app.
+      const subscriberPhone = (pending && pending.phone) || phoneFromSubscriberId(subscriberId) ||
+        normalizeBangladeshPhone(result.phone || '');
+      if (pending) pendingOtps.delete(String(referenceNo));
 
       const { status: normalizedStatus, entitlementActive } = SubscriptionService.normalizeStatus(rawStatus);
 
@@ -323,7 +398,17 @@ class SubscriptionController {
       console.log(`[SubscriptionController] Processing unsubscribe for user ${uid}, phone: ${maskPhone(sub.phone)}`);
       
       try {
-        await AppsProService.unsubscribe(sub.phone, uid);
+        const result = await AppsProService.unsubscribe(sub.phone, uid);
+        // HTTP 200 alone is not a cancellation: AppsPro reports the operator's answer in
+        // status_code. Unless it is confirmed, the user must not be told billing stopped.
+        if (!unsubscribeConfirmed(result)) {
+          console.error('[SubscriptionController] Unsubscribe not confirmed:', result && result.status_code, result && result.status_detail);
+          return res.status(502).json({
+            success: false,
+            error: 'UNSUBSCRIBE_NOT_CONFIRMED',
+            message: 'We could not confirm the cancellation with your mobile operator. You have NOT been unsubscribed yet. Please try again in a few minutes.',
+          });
+        }
       } catch (upstreamErr) {
         // Do NOT mark the subscription cancelled if the operator did not confirm it: the user
         // would believe billing stopped while the carrier keeps charging them daily.
@@ -400,61 +485,12 @@ class SubscriptionController {
       });
     }
   }
-
-  /**
-   * POST /subscription/subscribe
-   * Direct server-side subscribe (alternative flow)
-   */
-  static async directSubscribe(req, res) {
-    try {
-      const uid = req.user.uid;
-      const { phone } = req.body;
-
-      if (!phone) {
-        return res.status(400).json({
-          success: false,
-          error: 'PHONE_REQUIRED',
-          message: 'Phone number is required.',
-        });
-      }
-
-      const normalizedPhone = normalizeBangladeshPhone(phone);
-      if (!normalizedPhone) {
-        return res.status(400).json({
-          success: false,
-          error: 'INVALID_PHONE',
-          message: 'Invalid Bangladesh mobile number format.',
-        });
-      }
-
-      const result = await AppsProService.subscribe(normalizedPhone, uid);
-      const statusStr = result.subscription_status || result.status || (result.valid ? 'active' : 'unknown');
-      const { entitlementActive } = SubscriptionService.normalizeStatus(statusStr);
-
-      const savedRecord = await SubscriptionService.saveSubscription(uid, {
-        status: statusStr,
-        phone: normalizedPhone,
-        appsproSubscriberId: result.subscriber_id || null,
-        frequency: result.frequency || 'daily',
-      });
-
-      return res.status(200).json({
-        success: true,
-        entitlementActive,
-        subscription: savedRecord,
-      });
-    } catch (err) {
-      console.error('[SubscriptionController] directSubscribe error:', err.message);
-      return res.status(err.status || 500).json({
-        success: false,
-        error: 'DIRECT_SUBSCRIBE_FAILED',
-        message: err.message,
-      });
-    }
-  }
 }
 
 module.exports = {
   SubscriptionController,
   normalizeBangladeshPhone,
+  phoneFromSubscriberId,
+  unsubscribeConfirmed,
+  _pendingOtps: pendingOtps, // tests only
 };

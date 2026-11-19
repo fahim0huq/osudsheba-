@@ -25,6 +25,21 @@ const otpRequestLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Rate limiter for OTP checks (stops guessing the 6-digit code)
+const otpVerifyLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  keyGenerator: (req) => req.user ? req.user.uid : req.ip,
+  validate: false,
+  message: {
+    success: false,
+    error: 'RATE_LIMITED',
+    message: 'Too many attempts. Please wait a few minutes and request a new OTP.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // Authenticated subscription endpoints
 router.get('/status', authenticateFirebaseToken, SubscriptionController.getStatus);
 router.get('/subscription', authenticateFirebaseToken, SubscriptionController.getStatus); // Proxy compatibility
@@ -49,9 +64,10 @@ router.get('/diagnostic', async (req, res) => {
   }
 });
 router.post('/otp/request', authenticateFirebaseToken, otpRequestLimiter, SubscriptionController.requestOtp);
-router.post('/otp/verify', authenticateFirebaseToken, SubscriptionController.verifyOtp);
+router.post('/otp/verify', authenticateFirebaseToken, otpVerifyLimiter, SubscriptionController.verifyOtp);
 router.post('/unsubscribe', authenticateFirebaseToken, SubscriptionController.unsubscribe);
-router.post('/subscribe', authenticateFirebaseToken, SubscriptionController.directSubscribe);
+// No /subscribe route: subscribing without an OTP is for trusted server-to-server use only
+// (AppsPro docs); exposed here it let any signed-in user subscribe a stranger's number.
 router.delete('/account', authenticateFirebaseToken, SubscriptionController.deleteAccountData);
 
 module.exports = router;

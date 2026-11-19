@@ -21,8 +21,9 @@ async function authenticateFirebaseToken(req, res, next) {
   try {
     // Allow mock authentication for local development/testing ONLY
     if (process.env.NODE_ENV !== 'production' && process.env.ALLOW_MOCK_AUTH === 'true' && token.startsWith('mock_token_for_')) {
-      const mockUid = token.replace('mock_token_for_', '');
-      req.user = { uid: mockUid, email: `${mockUid}@example.com` };
+      // "mock_token_for_<uid>" or "mock_token_for_<uid>__phone_<+8801...>" (a phone sign-in).
+      const [mockUid, mockPhone] = token.replace('mock_token_for_', '').split('__phone_');
+      req.user = { uid: mockUid, email: `${mockUid}@example.com`, ...(mockPhone ? { phone_number: mockPhone } : {}) };
       return next();
     }
 

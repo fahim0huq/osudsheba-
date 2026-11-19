@@ -151,11 +151,17 @@ async function runWebTests() {
     const resRepeat = await sendHttpRequest('/web-subscription/otp/request', 'POST', {}, { phone: robiPhone });
     assert(resRepeat.status === 200 && resRepeat.body.alreadyRegistered === true, 'Requesting OTP for already subscribed number returns alreadyRegistered: true');
 
+    // TEST 13a: a phone number in the URL is not proof of owning it: nothing is linked
+    const resUrlPhone = await sendHttpRequest(`/subscription/status?phone=${robiPhone}`, 'GET', {
+      'Authorization': 'Bearer mock_token_for_url_phone_user',
+    });
+    assert(resUrlPhone.status === 200 && resUrlPhone.body.valid === false, 'A phone number passed in the URL does not link someone else\'s subscription');
+
     // TEST 13: Cross-Platform Entitlement Sync (Flutter App Startup Gate)
-    // A mobile user signs into Flutter app via Firebase Phone Auth with 01899112233
-    // Flutter app calls GET /subscription/status with Firebase Auth header
-    const resMobileAppCheck = await sendHttpRequest(`/subscription/status?phone=${robiPhone}`, 'GET', {
-      'Authorization': 'Bearer mock_token_for_new_mobile_user_abc',
+    // A mobile user signs into the Flutter app with Firebase Phone Auth on the same number;
+    // the app calls GET /subscription/status and the verified number links the subscription.
+    const resMobileAppCheck = await sendHttpRequest('/subscription/status', 'GET', {
+      'Authorization': `Bearer mock_token_for_new_mobile_user_abc__phone_+88${robiPhone}`,
     });
     assert(resMobileAppCheck.status === 200 && resMobileAppCheck.body.valid === true, 'Mobile app sync automatically links website subscription to Firebase UID and confirms entitlement');
 

@@ -164,6 +164,18 @@ async function run() {
     eq(calls, 0, 'calls');
   });
 
+  await test('a pending plan unlocks as soon as the operator confirms the charge', async () => {
+    const before = new Date(Date.now() - 30 * 1000).toISOString();
+    store = { u1: { uid: 'u1', phone: '01812345678', status: 'pending', entitlementActive: false, lastVerifiedAt: before } };
+    AppsProService.getLiveStatusByPhone = async () => ({ subscription_status: 'INITIAL CHARGING PENDING' });
+    eq((await call(SubscriptionController.getStatus)).body.valid, false, 'still charging');
+    store.u1.lastVerifiedAt = before;
+    AppsProService.getLiveStatusByPhone = async () => ({ subscription_status: 'REGISTERED' });
+    const r = await call(SubscriptionController.getStatus);
+    eq(r.body.valid, true, 'unlocked');
+    eq(store.u1.status, 'active', 'saved active');
+  });
+
   const { processEvent } = require('../webhooks/appspro.webhook');
 
   await test('webhook: subscriber.created at OTP request does not grant premium', async () => {

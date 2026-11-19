@@ -10,6 +10,7 @@ import '../../../core/services/mock_data_service.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../shared/widgets/app_primary_button.dart';
 import '../../../shared/widgets/fade_slide_in.dart';
+import 'widgets/charge_waiting_card.dart';
 
 class SubscriptionScreen extends ConsumerStatefulWidget {
   const SubscriptionScreen({super.key});
@@ -31,6 +32,13 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
   int _countdownSeconds = 60;
   bool _canResend = false;
 
+  // After the OTP: the operator is still charging ("pending"). Poll until it unlocks.
+  bool _waiting = false;
+  bool _waitTimedOut = false;
+  bool _polling = false;
+  Timer? _pollTimer;
+  DateTime? _waitStart;
+
   @override
   void initState() {
     super.initState();
@@ -46,12 +54,82 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
         }
         _phoneController.text = phone;
       }
+      // Came back while the charge is still pending (e.g. after reopening the app): keep
+      // waiting for the operator instead of asking for a new OTP.
+      if (ref.read(subscriptionProvider).value?.isPending ?? false) _startWaiting();
     });
+  }
+
+  void _startWaiting() {
+    _pollTimer?.cancel();
+    setState(() {
+      _waiting = true;
+      _waitTimedOut = false;
+      _errorMessage = null;
+    });
+    _waitStart = DateTime.now();
+    _pollTimer = Timer.periodic(const Duration(seconds: 5), (_) => _pollOnce());
+  }
+
+  void _stopWaiting() {
+    _pollTimer?.cancel();
+    setState(() {
+      _waiting = false;
+      _waitTimedOut = false;
+      _isOtpSent = false;
+      _otpController.clear();
+    });
+  }
+
+  Future<void> _pollOnce() async {
+    if (_polling) return;
+    _polling = true;
+    try {
+      await ref.read(subscriptionProvider.notifier).refreshStatus();
+    } finally {
+      _polling = false;
+    }
+    if (!mounted || !_waiting) return;
+    final sub = ref.read(subscriptionProvider).value;
+    final bn = ref.read(appSettingsProvider).language == 'bn';
+    if (sub?.isEntitled ?? false) {
+      _pollTimer?.cancel();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(bn ? 'অভিনন্দন! ওষুধসেবা প্রিমিয়াম আনলক করা হয়েছে।' : 'Congratulations! OsudSheba Premium unlocked.'),
+        backgroundColor: AppColors.success,
+      ));
+      _goIntoApp();
+      return;
+    }
+    // A real answer that is neither active nor pending: the operator dropped the attempt.
+    if (sub != null && !sub.isPending && sub.state != SubscriptionState.error) {
+      _stopWaiting();
+      setState(() => _errorMessage = bn
+          ? 'অপারেটর সাবস্ক্রিপশন চালু করেনি। ব্যালেন্স দেখে আবার চেষ্টা করুন।'
+          : 'Your operator did not start the subscription. Check your balance and try again.');
+      return;
+    }
+    if (DateTime.now().difference(_waitStart ?? DateTime.now()) > const Duration(seconds: 90)) {
+      _pollTimer?.cancel();
+      setState(() => _waitTimedOut = true);
+    }
+  }
+
+  void _goIntoApp() {
+    if (!mounted) return;
+    final profile = ref.read(userProfileProvider);
+    final caregiver = effectiveRole(profile.role) == 'Caregiver';
+    if (!profile.profileCompleted) {
+      context.go(caregiver ? '/caregiver-profile-setup' : '/patient-profile-setup');
+    } else {
+      context.go(caregiver ? '/caregiver' : '/home');
+    }
   }
 
   @override
   void dispose() {
     _countdownTimer?.cancel();
+    _pollTimer?.cancel();
     _phoneController.dispose();
     _otpController.dispose();
     super.dispose();
@@ -211,12 +289,12 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
         }
       } else {
         final subState = ref.read(subscriptionProvider).value;
-        final isPending = subState?.isPending ?? false;
-        final msg = isPending
-            ? (lang == 'bn'
-                ? 'আপনার ওটিপি যাচাই হয়েছে, কিন্তু সিমে পর্যাপ্ত ব্যালেন্স না থাকায় সাবস্ক্রিপশন সক্রিয় হয়নি। অনুগ্রহ করে রিচার্জ করে আবার চেষ্টা করুন।'
-                : 'OTP verified, but subscription could not activate due to insufficient balance. Please recharge and try again.')
-            : (lang == 'bn'
+        if (subState?.isPending ?? false) {
+          // Not a failure: the operator is still charging. Wait and unlock by itself.
+          _startWaiting();
+          return;
+        }
+        final msg = (lang == 'bn'
                 ? 'সাবস্ক্রিপশন সক্রিয় করা যায়নি। অনুগ্রহ করে ব্যালেন্স রিচার্জ করে পুনরায় চেষ্টা করুন।'
                 : 'Subscription could not be activated. Please check your balance and try again.');
         setState(() {
@@ -542,7 +620,14 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                           ),
                         ),
 
-                      if (!_isOtpSent) ...[
+                      if (_waiting) ...[
+                        ChargeWaitingCard(
+                          bn: isBn,
+                          timedOut: _waitTimedOut,
+                          onCheckAgain: _startWaiting,
+                          onUseOtherNumber: _stopWaiting,
+                        ),
+                      ] else if (!_isOtpSent) ...[
                         // Step 1: Phone input
                         Text(
                           isBn ? 'আপনার রবি / এয়ারটেল মোবাইল নম্বর:' : 'Your Robi / Airtel mobile number:',

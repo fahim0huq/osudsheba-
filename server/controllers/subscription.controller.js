@@ -68,9 +68,13 @@ function unsubscribeConfirmed(result) {
  * be reached the plan is kept, so paying users are not locked out by an outage.
  */
 const RECHECK_MS = 15 * 60 * 1000;
+// A pending plan (OTP done, operator still charging) is checked far more often, so premium
+// unlocks within seconds of the operator's charge instead of never.
+const PENDING_RECHECK_MS = 15 * 1000;
 async function recheckWithAppsPro(uid, sub) {
   const last = Date.parse(sub.lastVerifiedAt || '') || 0;
-  if (Date.now() - last < RECHECK_MS) return sub;
+  const wasPending = !sub.entitlementActive && sub.status === 'pending';
+  if (Date.now() - last < (wasPending ? PENDING_RECHECK_MS : RECHECK_MS)) return sub;
   let status = null;
   try {
     if (sub.phone) {
@@ -89,9 +93,13 @@ async function recheckWithAppsPro(uid, sub) {
     }
   }
   if (!status) return sub;
-  const { entitlementActive } = SubscriptionService.normalizeStatus(status);
+  const { status: normalized, entitlementActive } = SubscriptionService.normalizeStatus(status);
   if (entitlementActive) {
-    return SubscriptionService.saveSubscription(uid, {}); // still active: refresh lastVerifiedAt
+    if (wasPending) console.log(`[SubscriptionController] Re-check: ${uid} charge confirmed (${status}); premium unlocked.`);
+    return SubscriptionService.saveSubscription(uid, wasPending ? { status } : {});
+  }
+  if (normalized === 'pending') {
+    return SubscriptionService.saveSubscription(uid, {}); // still waiting: refresh lastVerifiedAt
   }
   console.log(`[SubscriptionController] Re-check: ${uid} is now ${status} at the operator; premium removed.`);
   return SubscriptionService.saveSubscription(uid, { status });
@@ -105,7 +113,7 @@ class SubscriptionController {
     try {
       const uid = req.user.uid;
       let sub = await SubscriptionService.getSubscription(uid);
-      if (sub && sub.entitlementActive) sub = await recheckWithAppsPro(uid, sub);
+      if (sub && (sub.entitlementActive || sub.status === 'pending')) sub = await recheckWithAppsPro(uid, sub);
 
       // If no active subscription for UID, check if user's phone has an active subscription (e.g., from website subscription portal)
       // Only the phone number Firebase verified at sign-in counts here, never one passed in
@@ -390,8 +398,10 @@ class SubscriptionController {
             phoneMasked: savedRecord.phoneMasked,
             subscribedAt: null,
           },
-          message: 'আপনার ওটিপি যাচাই সফল হয়েছে, তবে সিমে পর্যাপ্ত ব্যালেন্স না থাকায় সাবস্ক্রিপশন সক্রিয় করা সম্ভব হয়নি। অনুগ্রহ করে পর্যাপ্ত ব্যালেন্স রিচার্জ করে পুনরায় চেষ্টা করুন।',
-          messageEn: 'OTP verified successfully, but subscription could not be activated due to insufficient balance. Please recharge and try again.',
+          // "Pending" means the operator has not finished charging yet. Usually that takes
+          // seconds; it stays pending only if the balance is too low. It is NOT a failure.
+          message: 'ওটিপি যাচাই হয়েছে। আপনার অপারেটর এখন চার্জ নিশ্চিত করছে, সাধারণত এক মিনিটের মধ্যে হয়ে যায়।',
+          messageEn: 'OTP verified. Your operator is confirming the charge; this usually takes less than a minute.',
         });
       } else {
         console.warn(`[SubscriptionController] OTP verified but subscription status not active: ${rawStatus}`);

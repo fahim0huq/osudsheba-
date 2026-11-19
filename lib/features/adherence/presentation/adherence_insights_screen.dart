@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../core/services/ai_suggestion_service.dart';
+import '../../../core/services/medication_voice_service.dart';
 import '../../../shared/widgets/fade_slide_in.dart';
 
 class AdherenceInsightsScreen extends ConsumerWidget {
@@ -110,7 +111,7 @@ class AdherenceInsightsScreen extends ConsumerWidget {
                                 shape: BoxShape.circle,
                               ),
                               child: const Icon(
-                                Icons.psychology_rounded,
+                                Icons.lightbulb_outline_rounded,
                                 color: AppColors.primary,
                                 size: 26.0,
                               ),
@@ -121,7 +122,7 @@ class AdherenceInsightsScreen extends ConsumerWidget {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    lang == 'bn' ? 'পরামর্শ #${index + 1}' : 'Tip #${index + 1}',
+                                    lang == 'bn' ? 'পরামর্শ ${MedicationVoiceService.toBanglaDigits('${index + 1}')}' : 'Tip ${index + 1}',
                                     style: const TextStyle(
                                       fontSize: 13.5,
                                       fontWeight: FontWeight.bold,

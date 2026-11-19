@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../../core/constants/app_colors.dart';
+import '../../../core/services/medication_voice_service.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../shared/widgets/app_primary_button.dart';
 import '../../../shared/widgets/app_secondary_button.dart';
@@ -23,6 +24,7 @@ class AdherenceDashboardScreen extends ConsumerWidget {
     final totalLogs = stats.totalLogs;
 
     final title = lang == 'bn' ? 'ওষুধ মেনে চলার রিপোর্ট' : 'Adherence Dashboard';
+    String num(int n) => lang == 'bn' ? MedicationVoiceService.toBanglaDigits('$n') : '$n';
 
     if (totalLogs == 0) {
       return Scaffold(
@@ -115,7 +117,7 @@ class AdherenceDashboardScreen extends ConsumerWidget {
                             shape: BoxShape.circle,
                           ),
                           child: Text(
-                            '$adherencePercent%',
+                            '${num(adherencePercent)}%',
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 22.0,
@@ -234,12 +236,12 @@ class AdherenceDashboardScreen extends ConsumerWidget {
                   mainAxisSpacing: 10,
                   childAspectRatio: 2.1,
                   children: [
-                    _buildStatTile(lang == 'bn' ? 'খাওয়া হয়েছে' : 'Taken', takenCount.toString(), AppColors.success),
-                    _buildStatTile(lang == 'bn' ? 'মিস হয়েছে' : 'Missed', missedCount.toString(), AppColors.error),
-                    _buildStatTile(lang == 'bn' ? 'বাদ দেওয়া' : 'Skipped', skippedCount.toString(), AppColors.textSecondary),
-                    _buildStatTile(lang == 'bn' ? 'দেরি হবে' : 'Snoozed', snoozedCount.toString(), AppColors.warning),
-                    _buildStatTile(lang == 'bn' ? 'দেরিতে খাওয়া' : 'Late', lateCount.toString(), Colors.purple),
-                    _buildStatTile(lang == 'bn' ? 'মোট ডোজ' : 'Total Doses', totalLogs.toString(), AppColors.primary),
+                    _buildStatTile(lang == 'bn' ? 'খাওয়া হয়েছে' : 'Taken', num(takenCount), AppColors.success),
+                    _buildStatTile(lang == 'bn' ? 'মিস হয়েছে' : 'Missed', num(missedCount), AppColors.error),
+                    _buildStatTile(lang == 'bn' ? 'বাদ দেওয়া' : 'Skipped', num(skippedCount), AppColors.textSecondary),
+                    _buildStatTile(lang == 'bn' ? 'পিছিয়ে দেওয়া' : 'Snoozed', num(snoozedCount), AppColors.warning),
+                    _buildStatTile(lang == 'bn' ? 'দেরিতে খাওয়া' : 'Late', num(lateCount), Colors.purple),
+                    _buildStatTile(lang == 'bn' ? 'মোট ডোজ' : 'Total Doses', num(totalLogs), AppColors.primary),
                   ],
                 ),
               ),

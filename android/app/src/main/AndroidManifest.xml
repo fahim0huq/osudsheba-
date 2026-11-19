@@ -2,15 +2,14 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
-    
-    <!-- 
-      Play Store policy requires that the app's core purpose must justify the use of USE_EXACT_ALARM 
-      (Android 13+). A medication reminder and adherence tracking application qualifies for this 
-      exception as missing reminders can have severe health consequences.
+    <!--
+      Exact alarms: SCHEDULE_EXACT_ALARM only, which the user grants in "Alarms & reminders".
+      If it is not granted, NotificationService falls back to inexact alarms (may ring a few
+      minutes late). USE_EXACT_ALARM and USE_FULL_SCREEN_INTENT were removed for Play policy
+      (both are reserved for alarm-clock / calling apps); reminders show as high-priority
+      alarm notifications instead of taking over the lock screen.
     -->
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -19,17 +18,13 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
-        android:label="osudsheba"
+        android:label="OsudSheba"
         android:name="${applicationName}"
         android:icon="@mipmap/launcher_icon">
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true"
-            android:showOnLockScreen="true"
-            android:inheritShowWhenLocked="true"
             android:taskAffinity=""
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
@@ -53,6 +48,10 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- Push reminders from family use their own channel (created in NotificationService). -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="family_reminders" />
 
         <receiver android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" android:exported="false" />
         <receiver android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver" android:exported="true">
@@ -73,6 +72,20 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- Phone dialer and SMS app, used by "Call family" and caregiver invites -->
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+            <data android:scheme="tel" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="sms" />
+        </intent>
+        <!-- Text-to-speech engines (spoken reminders). Without this, Android 11+ hides the
+             phone's speech engines from the app and nothing is spoken. -->
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
     </queries>
 </manifest>

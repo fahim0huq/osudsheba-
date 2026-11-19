@@ -1,11 +1,11 @@
 {
-    "name": "osudsheba",
-    "short_name": "osudsheba",
+    "name": "OsudSheba",
+    "short_name": "OsudSheba",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#ffffff",
     "theme_color": "#ffffff",
-    "description": "A new Flutter project.",
+    "description": "Medicine reminders for older adults and their families.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

@@ -105,8 +105,8 @@ async function runWebTests() {
     const resInvalidPhone = await sendHttpRequest('/web-subscription/otp/request', 'POST', {}, { phone: '123' });
     assert(resInvalidPhone.status === 400 && resInvalidPhone.body.error === 'INVALID_PHONE_FORMAT', 'Request OTP with invalid phone format returns 400 INVALID_PHONE_FORMAT');
 
-    // TEST 5: POST /web-subscription/otp/request with supported Robi phone (01899112233) -> 200
-    const robiPhone = '01899112233';
+    // TEST 5: POST /web-subscription/otp/request with supported Robi phone
+    const robiPhone = '018' + String(Date.now()).slice(-8);
     const resOtpReq = await sendHttpRequest('/web-subscription/otp/request', 'POST', {}, { phone: robiPhone });
     assert(resOtpReq.status === 200 && resOtpReq.body.success === true, 'Request OTP for Robi number succeeds with 200');
     assert(Boolean(resOtpReq.body.reference_no), 'Request OTP returns reference_no');
@@ -158,6 +158,21 @@ async function runWebTests() {
       'Authorization': 'Bearer mock_token_for_new_mobile_user_abc',
     });
     assert(resMobileAppCheck.status === 200 && resMobileAppCheck.body.valid === true, 'Mobile app sync automatically links website subscription to Firebase UID and confirms entitlement');
+
+    // TEST 14: Pending / Zero-Balance user verification withholds download token
+    // Simulate user with insufficient balance (saved as pending)
+    const zeroBalancePhone = '01888776655';
+    await SubscriptionService.saveSubscription(`web_${zeroBalancePhone}`, {
+      status: 'pending',
+      originalStatus: 'INITIAL CHARGING PENDING',
+      phone: zeroBalancePhone,
+    });
+    const resPendingStatus = await sendHttpRequest('/web-subscription/status', 'POST', {}, { phone: zeroBalancePhone });
+    assert(resPendingStatus.status === 200 && resPendingStatus.body.valid === false && resPendingStatus.body.status === 'pending', 'Pending/zero-balance user status returns valid = false');
+
+    // TEST 15: Pending / Zero-Balance user download attempt is BLOCKED with 403
+    const resPendingDownload = await sendHttpRequest(`/web-subscription/download-check?phone=${zeroBalancePhone}`, 'GET');
+    assert(resPendingDownload.status === 403 && resPendingDownload.body.error === 'SUBSCRIPTION_REQUIRED', 'Pending/zero-balance user is blocked from downloading APK with 403');
 
     console.log('\n======================================================');
     console.log(`TEST SUMMARY: ${passed} PASSED, ${failed} FAILED`);

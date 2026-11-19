@@ -29,9 +29,29 @@ const otpRequestLimiter = rateLimit({
 router.get('/status', authenticateFirebaseToken, SubscriptionController.getStatus);
 router.get('/subscription', authenticateFirebaseToken, SubscriptionController.getStatus); // Proxy compatibility
 router.get('/app-info', SubscriptionController.getAppInfo);
+// Operator-only diagnostics. Disabled unless DIAGNOSTICS_TOKEN is configured, and then
+// requires header "x-diagnostics-token: <DIAGNOSTICS_TOKEN>". Never public.
+router.get('/diagnostic', async (req, res) => {
+  const expected = (process.env.DIAGNOSTICS_TOKEN || '').trim();
+  const provided = String(req.headers['x-diagnostics-token'] || '');
+  const crypto = require('crypto');
+  const ok = expected.length >= 16 && provided.length === expected.length &&
+    crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+  if (!ok) {
+    return res.status(404).json({ success: false, error: 'NOT_FOUND' });
+  }
+  try {
+    const { AppsProService } = require('../services/appspro.service');
+    const diagnostic = await AppsProService.runDiagnostics();
+    return res.status(200).json({ success: true, ...diagnostic });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
 router.post('/otp/request', authenticateFirebaseToken, otpRequestLimiter, SubscriptionController.requestOtp);
 router.post('/otp/verify', authenticateFirebaseToken, SubscriptionController.verifyOtp);
 router.post('/unsubscribe', authenticateFirebaseToken, SubscriptionController.unsubscribe);
 router.post('/subscribe', authenticateFirebaseToken, SubscriptionController.directSubscribe);
+router.delete('/account', authenticateFirebaseToken, SubscriptionController.deleteAccountData);
 
 module.exports = router;

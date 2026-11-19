@@ -118,11 +118,13 @@ router.get('/app-info', async (req, res) => {
     return res.status(200).json({
       success: true,
       name: appInfo.name || 'OsudSheba',
-      pricing: appInfo.pricing || {
-        amount: '2.00',
-        currency: 'BDT',
-        frequency: 'daily',
-      },
+      pricing: (Array.isArray(appInfo.pricing) && appInfo.pricing.length === 0)
+        ? { amount: '2.00', currency: 'BDT', frequency: 'daily' }
+        : (appInfo.pricing || {
+            amount: '2.00',
+            currency: 'BDT',
+            frequency: 'daily',
+          }),
       supported_carriers: ['Robi', 'Airtel'],
       carrier_billing_provider: 'AppsPro / BDApps',
     });
@@ -262,27 +264,26 @@ router.post('/otp/verify', webOtpVerifyLimiter, async (req, res) => {
     // Verify OTP with AppsPro
     const result = await AppsProService.verifyOtp(referenceNo, cleanOtp, externalUserId);
 
-    const statusStr = result.subscription_status || result.status || (result.valid ? 'active' : 'unknown');
+    const rawStatus = result.subscription_status || result.status || 'unknown';
     const subscriberId = result.subscriber_id || result.subscriberId || result.data?.subscriber_id || null;
     const localSubscriberId = result.local_subscriber_id || result.id || null;
     const frequency = result.frequency || result.plan?.frequency || 'daily';
     const subscriberPhone = result.phone || normalizedPhone;
 
-    const { entitlementActive: normalizedActive } = SubscriptionService.normalizeStatus(statusStr);
-    const entitlementActive = normalizedActive || Boolean(result.valid);
+    const { status: normalizedStatus, entitlementActive } = SubscriptionService.normalizeStatus(rawStatus);
+
+    // Save subscription in database under externalUserId and subscriberPhone
+    const savedRecord = await SubscriptionService.saveSubscription(externalUserId, {
+      status: rawStatus,
+      appsproSubscriberId: subscriberId,
+      appsproLocalSubscriberId: localSubscriberId,
+      phone: subscriberPhone,
+      frequency: frequency,
+      isSandbox: process.env.APPSPRO_ENV === 'sandbox',
+    });
 
     if (entitlementActive) {
-      // Save subscription in database under externalUserId and subscriberPhone
-      const savedRecord = await SubscriptionService.saveSubscription(externalUserId, {
-        status: statusStr,
-        appsproSubscriberId: subscriberId,
-        appsproLocalSubscriberId: localSubscriberId,
-        phone: subscriberPhone,
-        frequency: frequency,
-        isSandbox: process.env.APPSPRO_ENV === 'sandbox',
-      });
-
-      console.log(`[WebSubscription] Website subscription verified for ${maskPhone(subscriberPhone)}. Entitlement GRANTED.`);
+      console.log(`[WebSubscription] Website subscription ACTIVE for ${maskPhone(subscriberPhone)}. Entitlement GRANTED.`);
 
       // Generate signed download token
       const downloadToken = generateDownloadToken(subscriberPhone || 'anonymous');
@@ -290,18 +291,35 @@ router.post('/otp/verify', webOtpVerifyLimiter, async (req, res) => {
       return res.status(200).json({
         success: true,
         valid: true,
-        status: savedRecord.status,
+        isSubscribed: true,
+        status: 'active',
         entitlementActive: true,
         phoneMasked: savedRecord.phoneMasked || maskPhone(subscriberPhone),
         downloadToken,
         message: 'Subscription confirmed successfully! Your OsudSheba Premium subscription is active.',
       });
+    } else if (normalizedStatus === 'pending') {
+      console.warn(`[WebSubscription] Website OTP verified for ${maskPhone(subscriberPhone)} but charging is PENDING (insufficient balance). Token WITHHELD.`);
+
+      return res.status(200).json({
+        success: true,
+        valid: true,
+        isSubscribed: false,
+        status: 'pending',
+        entitlementActive: false,
+        phoneMasked: savedRecord.phoneMasked || maskPhone(subscriberPhone),
+        downloadToken: null,
+        message: 'আপনার ওটিপি যাচাই সফল হয়েছে, তবে সিমে পর্যাপ্ত ব্যালেন্স না থাকায় সাবস্ক্রিপশন সক্রিয় করা সম্ভব হয়নি। অনুগ্রহ করে রিচার্জ করে আবার চেষ্টা করুন।',
+        messageEn: 'OTP verified successfully, but subscription could not be activated due to insufficient balance. Please recharge and try again.',
+      });
     } else {
-      console.warn(`[WebSubscription] OTP verified but status not active: ${statusStr}`);
+      console.warn(`[WebSubscription] OTP verified but status not active: ${rawStatus}`);
       return res.status(400).json({
         success: false,
         valid: false,
-        status: statusStr,
+        isSubscribed: false,
+        status: rawStatus,
+        entitlementActive: false,
         error: 'SUBSCRIPTION_NOT_ACTIVE',
         message: 'Subscription could not be confirmed. Please check with your mobile operator.',
       });

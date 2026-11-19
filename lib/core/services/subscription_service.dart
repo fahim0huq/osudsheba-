@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -7,27 +8,24 @@ import '../models/subscription.dart';
 
 class SubscriptionService {
   /// Base URL of the OsudSheba backend
+  static const String defaultProductionUrl = 'https://osudsheba.onrender.com';
+
   static String get baseUrl {
     const customUrl = String.fromEnvironment('BACKEND_BASE_URL');
     if (customUrl.isNotEmpty) {
       return customUrl;
     }
-    if (kIsWeb) {
-      return 'http://localhost:3000';
-    }
-    try {
-      if (Platform.isAndroid) {
-        // Points to host machine localhost from Android emulator
-        return 'http://10.0.2.2:3000';
-      }
-    } catch (_) {}
-    return 'http://localhost:3000';
+    return defaultProductionUrl;
   }
 
   /// Initialize AppsProClient with backend proxy for native SDK widgets
   static void configureNativeSdk({String? publishableKey, Future<String?> Function()? idTokenProvider}) {
     try {
-      final key = publishableKey ?? 'pk_sandbox_osudsheba_test';
+      const defaultPublishableKey = String.fromEnvironment(
+        'APPSPRO_PUBLISHABLE_KEY',
+        defaultValue: 'pk_682ba67415f120b667de6f1a',
+      );
+      final key = publishableKey ?? defaultPublishableKey;
       AppsProClient.configure(
         publishableKey: key,
         backend: AppsProProxyBackend(
@@ -164,4 +162,31 @@ class SubscriptionService {
       throw Exception('Cannot connect to subscription server. Check your connection.');
     }
   }
+
+  /// Delete this user's data on the server (account deletion).
+  /// Throws [SubscriptionStillActiveException] while carrier billing is still running.
+  Future<void> deleteAccountData(String? idToken) async {
+    final uri = Uri.parse('$baseUrl/subscription/account');
+    try {
+      final response = await http.delete(uri, headers: _headers(idToken)).timeout(const Duration(seconds: 30));
+      if (response.statusCode == 200) return;
+      Map<String, dynamic> data = {};
+      try {
+        data = jsonDecode(response.body) as Map<String, dynamic>;
+      } catch (_) {}
+      if (response.statusCode == 409 && data['error'] == 'SUBSCRIPTION_STILL_ACTIVE') {
+        throw const SubscriptionStillActiveException();
+      }
+      throw Exception(data['message'] ?? 'Could not delete your account data (HTTP ${response.statusCode}).');
+    } on SocketException {
+      throw Exception('Cannot connect to the server. Check your connection.');
+    } on TimeoutException {
+      throw Exception('The server did not answer. Please try again.');
+    }
+  }
+}
+
+/// The server refused to delete account data because the subscription is still active.
+class SubscriptionStillActiveException implements Exception {
+  const SubscriptionStillActiveException();
 }

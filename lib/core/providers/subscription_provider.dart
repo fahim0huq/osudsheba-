@@ -106,13 +106,26 @@ class SubscriptionNotifier extends StateNotifier<AsyncValue<Subscription>> {
     try {
       final idToken = await _ref.read(authServiceProvider).getIdToken();
       final freshSub = await _service.getStatus(idToken);
-      
+
+      // getStatus() reports network/server failures as an "error" subscription instead of
+      // throwing. That is NOT an answer from the server about the user's subscription, so it
+      // must never replace a known-good cached entitlement: otherwise a patient with no
+      // internet (or while the server is waking up) is locked out of their medicine list
+      // and reminders. Only an authoritative server answer may revoke access.
+      final previous = state.value;
+      if (freshSub.state == SubscriptionState.error && previous != null && previous.isEntitled) {
+        debugPrint('[SubscriptionNotifier] Status check failed (${freshSub.errorMessage}); keeping cached entitlement.');
+        return;
+      }
+
       state = AsyncValue.data(freshSub);
-      await _cacheSubscription(uid, freshSub);
+      if (freshSub.state != SubscriptionState.error) {
+        await _cacheSubscription(uid, freshSub);
+      }
     } catch (e, st) {
       debugPrint('[SubscriptionNotifier] Refresh error: $e');
-      // If we already had cached data, preserve it or show error
-      if (state.value != null && !state.value!.isEntitled) {
+      // Keep a cached entitled state on unexpected errors too (offline-first).
+      if (state.value == null || !state.value!.isEntitled) {
         state = AsyncValue.error(e, st);
       }
     }
@@ -151,28 +164,18 @@ class SubscriptionNotifier extends StateNotifier<AsyncValue<Subscription>> {
     }
   }
 
-  /// Cancel subscription
-  Future<bool> unsubscribe() async {
+  /// Cancel subscription.
+  ///
+  /// Throws if the server/operator did not confirm the cancellation. Previously a failure was
+  /// shown as "cancelled successfully" while the carrier kept charging the user every day.
+  Future<void> unsubscribe() async {
     final uid = _currentUid;
     final idToken = await _ref.read(authServiceProvider).getIdToken();
 
-    try {
-      final cancelledSub = await _service.unsubscribe(idToken);
-      state = AsyncValue.data(cancelledSub);
-
-      if (uid != null) {
-        await _cacheSubscription(uid, cancelledSub);
-      }
-      return true;
-    } catch (e) {
-      debugPrint('[SubscriptionNotifier] Unsubscribe error: $e');
-      // Set to cancelled locally regardless of upstream failure
-      final fallbackCancelled = const Subscription(status: 'cancelled', entitlementActive: false);
-      state = AsyncValue.data(fallbackCancelled);
-      if (uid != null) {
-        await _cacheSubscription(uid, fallbackCancelled);
-      }
-      return true;
+    final cancelledSub = await _service.unsubscribe(idToken);
+    state = AsyncValue.data(cancelledSub);
+    if (uid != null) {
+      await _cacheSubscription(uid, cancelledSub);
     }
   }
 

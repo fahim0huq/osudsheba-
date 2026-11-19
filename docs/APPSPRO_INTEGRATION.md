@@ -159,7 +159,8 @@ Enforces idempotency and provides an audit trail:
 
 ### Premium API Access Control
 
-- **`POST /analyze-prescription`**:
+- **`POST /analyze-prescription`** (removed in Nov 2026: scanning now runs on the phone, so this
+  route and its Replicate/Gemini call no longer exist; kept here as an example of the gating pattern):
   Protected by `requireSubscription` middleware.
   Unentitled users receive `HTTP 403`:
   ```json
@@ -243,7 +244,7 @@ Validates:
 - Invalid HMAC signature rejection (401).
 - Event idempotency (duplicate event ID ignored).
 - Lifecycle events (`created`, `cancelled`, `reactivated`).
-- Premium endpoint gating (`/analyze-prescription` 403 without subscription, 200 with subscription).
+- Premium endpoint gating (a test endpoint: 403 without subscription, 200 with subscription).
 - Inbound SMS & USSD ingestion.
 
 ---

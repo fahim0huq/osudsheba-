@@ -220,38 +220,38 @@ class SubscriptionController {
       const result = await AppsProService.verifyOtp(referenceNo, otp.trim(), uid);
 
       // Inspect subscription status from AppsPro
-      // In AppsPro: status may be 'REGISTERED', 'ACTIVE', 'PENDING', 'SUCCESS'
-      const statusStr = result.subscription_status || result.status || (result.valid ? 'active' : 'unknown');
+      // In AppsPro: status may be 'REGISTERED', 'ACTIVE', 'PENDING', 'INITIAL CHARGING PENDING'
+      const rawStatus = result.subscription_status || result.status || 'unknown';
       const subscriberId = result.subscriber_id || result.subscriberId || result.data?.subscriber_id || null;
       const localSubscriberId = result.local_subscriber_id || result.id || null;
       const frequency = result.frequency || result.plan?.frequency || 'daily';
       const subscriberPhone = result.phone || (phone ? normalizeBangladeshPhone(phone) : null);
 
-      const { entitlementActive: normalizedActive } = SubscriptionService.normalizeStatus(statusStr);
-      const entitlementActive = normalizedActive || Boolean(result.valid);
+      const { status: normalizedStatus, entitlementActive } = SubscriptionService.normalizeStatus(rawStatus);
+
+      // Save subscription record with authoritative status
+      const savedRecord = await SubscriptionService.saveSubscription(uid, {
+        status: rawStatus,
+        appsproSubscriberId: subscriberId,
+        appsproLocalSubscriberId: localSubscriberId,
+        phone: subscriberPhone,
+        frequency: frequency,
+        isSandbox: process.env.APPSPRO_ENV === 'sandbox',
+      });
 
       if (entitlementActive) {
-        // Save immediately in database so entitlement is granted without waiting for webhook
-        const savedRecord = await SubscriptionService.saveSubscription(uid, {
-          status: statusStr,
-          appsproSubscriberId: subscriberId,
-          appsproLocalSubscriberId: localSubscriberId,
-          phone: subscriberPhone,
-          frequency: frequency,
-          isSandbox: process.env.APPSPRO_ENV === 'sandbox',
-        });
-
-        console.log(`[SubscriptionController] OTP verified successfully for ${uid}. Entitlement GRANTED.`);
+        console.log(`[SubscriptionController] OTP verified and subscription ACTIVE for ${uid}. Entitlement GRANTED.`);
 
         return res.status(200).json({
           success: true,
           valid: true,
           isSubscribed: true,
           subscriber_id: subscriberId,
-          subscription_status: savedRecord.status,
+          subscription_status: 'active',
+          status: 'active',
           entitlementActive: true,
           subscription: {
-            status: savedRecord.status,
+            status: 'active',
             entitlementActive: true,
             frequency: savedRecord.frequency,
             phoneMasked: savedRecord.phoneMasked,
@@ -259,14 +259,37 @@ class SubscriptionController {
           },
           message: 'Subscription confirmed successfully.',
         });
+      } else if (normalizedStatus === 'pending') {
+        console.warn(`[SubscriptionController] OTP verified for ${uid} but charging is PENDING (insufficient balance). Entitlement LOCKED.`);
+
+        return res.status(200).json({
+          success: true,
+          valid: true,
+          isSubscribed: false,
+          subscriber_id: subscriberId,
+          subscription_status: 'pending',
+          status: 'pending',
+          entitlementActive: false,
+          subscription: {
+            status: 'pending',
+            entitlementActive: false,
+            frequency: savedRecord.frequency,
+            phoneMasked: savedRecord.phoneMasked,
+            subscribedAt: null,
+          },
+          message: 'আপনার ওটিপি যাচাই সফল হয়েছে, তবে সিমে পর্যাপ্ত ব্যালেন্স না থাকায় সাবস্ক্রিপশন সক্রিয় করা সম্ভব হয়নি। অনুগ্রহ করে পর্যাপ্ত ব্যালেন্স রিচার্জ করে পুনরায় চেষ্টা করুন।',
+          messageEn: 'OTP verified successfully, but subscription could not be activated due to insufficient balance. Please recharge and try again.',
+        });
       } else {
-        console.warn(`[SubscriptionController] OTP verified but status not active/pending: ${statusStr}`);
+        console.warn(`[SubscriptionController] OTP verified but subscription status not active: ${rawStatus}`);
         return res.status(400).json({
           success: false,
           valid: false,
-          status: statusStr,
+          isSubscribed: false,
+          status: normalizedStatus,
+          entitlementActive: false,
           error: 'SUBSCRIPTION_NOT_ACTIVE',
-          message: `Subscription returned status: ${statusStr}`,
+          message: `Subscription returned status: ${rawStatus}`,
         });
       }
     } catch (err) {
@@ -302,8 +325,22 @@ class SubscriptionController {
       try {
         await AppsProService.unsubscribe(sub.phone, uid);
       } catch (upstreamErr) {
-        console.warn('[SubscriptionController] Upstream unsubscribe warning:', upstreamErr.message);
-        // Even if upstream reports already cancelled or error, update local record if appropriate
+        // Do NOT mark the subscription cancelled if the operator did not confirm it: the user
+        // would believe billing stopped while the carrier keeps charging them daily.
+        // Only explicit "already unsubscribed / not registered" answers are treated as success.
+        const msg = String(upstreamErr.message || '').toLowerCase();
+        const alreadyGone = upstreamErr.status === 404 ||
+          msg.includes('not registered') || msg.includes('already unsubscribed') ||
+          msg.includes('not subscribed') || msg.includes('unregistered');
+        if (!alreadyGone) {
+          console.error('[SubscriptionController] Upstream unsubscribe failed:', upstreamErr.message);
+          return res.status(502).json({
+            success: false,
+            error: 'UNSUBSCRIBE_UPSTREAM_FAILED',
+            message: 'We could not confirm the cancellation with your mobile operator. You have NOT been unsubscribed yet. Please try again in a few minutes.',
+          });
+        }
+        console.warn('[SubscriptionController] Upstream reports subscriber already inactive:', upstreamErr.message);
       }
 
       const updatedRecord = await SubscriptionService.saveSubscription(uid, {
@@ -328,6 +365,38 @@ class SubscriptionController {
         success: false,
         error: 'UNSUBSCRIBE_FAILED',
         message: 'Failed to cancel subscription. Please try again.',
+      });
+    }
+  }
+
+  /**
+   * DELETE /subscription/account
+   * Deletes the server-side data for the signed-in user (in-app account deletion).
+   * Refuses while carrier billing is still running: deleting the record would hide a
+   * subscription the operator keeps charging for. The app cancels it first, then retries.
+   */
+  static async deleteAccountData(req, res) {
+    try {
+      const uid = req.user.uid;
+      const sub = await SubscriptionService.getSubscription(uid);
+
+      if (sub && (sub.entitlementActive || sub.status === 'active' || sub.status === 'pending')) {
+        return res.status(409).json({
+          success: false,
+          error: 'SUBSCRIPTION_STILL_ACTIVE',
+          message: 'Cancel the subscription before deleting the account, so your operator stops charging you.',
+        });
+      }
+
+      await SubscriptionService.deleteSubscription(uid);
+      await SubscriptionService.deleteUserBackup(uid);
+      return res.status(200).json({ success: true, deleted: Boolean(sub) });
+    } catch (err) {
+      console.error('[SubscriptionController] deleteAccountData error:', err.message);
+      return res.status(500).json({
+        success: false,
+        error: 'ACCOUNT_DELETE_FAILED',
+        message: 'Could not delete your account data. Please try again.',
       });
     }
   }

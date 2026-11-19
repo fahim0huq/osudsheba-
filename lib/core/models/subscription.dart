@@ -35,8 +35,8 @@ class Subscription {
     this.errorMessage,
   });
 
-  /// True if user is granted premium access (active or pending per AppsPro rule)
-  bool get isEntitled => entitlementActive || status == 'active' || status == 'pending' || status.toLowerCase().contains('pending');
+  /// True only if user holds confirmed active entitlement and status is active
+  bool get isEntitled => entitlementActive && (status.toLowerCase() == 'active' || status.toLowerCase() == 'registered');
 
   bool get isActive => status == 'active';
   bool get isPending => status == 'pending' || status.toLowerCase().contains('pending');

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/constants/app_colors.dart';
+import '../../../core/constants/app_features.dart';
 import '../../../core/models/subscription.dart';
 import '../../../core/providers/subscription_provider.dart';
 import '../../../core/services/mock_data_service.dart';
@@ -122,13 +123,13 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
         );
         final profile = ref.read(userProfileProvider);
         if (!profile.profileCompleted) {
-          if (profile.role == 'Caregiver') {
+          if (effectiveRole(profile.role) == 'Caregiver') {
             context.go('/caregiver-profile-setup');
           } else {
             context.go('/patient-profile-setup');
           }
         } else {
-          if (profile.role == 'Caregiver') {
+          if (effectiveRole(profile.role) == 'Caregiver') {
             context.go('/caregiver');
           } else {
             context.go('/home');
@@ -196,18 +197,37 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
         // Immediate entitlement granted -> Route into the application
         final profile = ref.read(userProfileProvider);
         if (!profile.profileCompleted) {
-          if (profile.role == 'Caregiver') {
+          if (effectiveRole(profile.role) == 'Caregiver') {
             context.go('/caregiver-profile-setup');
           } else {
             context.go('/patient-profile-setup');
           }
         } else {
-          if (profile.role == 'Caregiver') {
+          if (effectiveRole(profile.role) == 'Caregiver') {
             context.go('/caregiver');
           } else {
             context.go('/home');
           }
         }
+      } else {
+        final subState = ref.read(subscriptionProvider).value;
+        final isPending = subState?.isPending ?? false;
+        final msg = isPending
+            ? (lang == 'bn'
+                ? 'আপনার ওটিপি যাচাই হয়েছে, কিন্তু সিমে পর্যাপ্ত ব্যালেন্স না থাকায় সাবস্ক্রিপশন সক্রিয় হয়নি। অনুগ্রহ করে রিচার্জ করে আবার চেষ্টা করুন।'
+                : 'OTP verified, but subscription could not activate due to insufficient balance. Please recharge and try again.')
+            : (lang == 'bn'
+                ? 'সাবস্ক্রিপশন সক্রিয় করা যায়নি। অনুগ্রহ করে ব্যালেন্স রিচার্জ করে পুনরায় চেষ্টা করুন।'
+                : 'Subscription could not be activated. Please check your balance and try again.');
+        setState(() {
+          _errorMessage = msg;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(msg),
+            backgroundColor: AppColors.error,
+          ),
+        );
       }
     } catch (e) {
       if (!mounted) return;
@@ -249,7 +269,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                 Text(
                   subtitle,
                   style: const TextStyle(
-                    fontSize: 12.5,
+                    fontSize: 13.5,
                     color: AppColors.textSecondary,
                   ),
                 ),
@@ -380,7 +400,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                             ),
                             Text(
                               isBn ? '(রবি ও এয়ারটেল)' : '(Robi & Airtel)',
-                              style: const TextStyle(color: Colors.amber, fontSize: 12.0, fontWeight: FontWeight.bold),
+                              style: const TextStyle(color: Colors.amber, fontSize: 13.5, fontWeight: FontWeight.bold),
                             ),
                           ],
                         ),
@@ -443,7 +463,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                       const Divider(height: 20.0),
                       _buildBenefitRow(
                         Icons.document_scanner_rounded,
-                        isBn ? 'এআই প্রেসক্রিপশন স্ক্যানার' : 'AI Prescription Scanner',
+                        isBn ? 'প্রেসক্রিপশন স্ক্যানার' : 'Prescription Scanner',
                         isBn ? 'ডাক্তারের প্রেসক্রিপশন থেকে স্বয়ংক্রিয় রুটিন শনাক্ত' : 'Extract medicine schedules automatically from photos',
                       ),
                       _buildBenefitRow(
@@ -495,7 +515,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                         isBn 
                           ? 'বিডিঅ্যাপস (BDApps) এর মাধ্যমে রবি ও এয়ারটেল গ্রাহকদের জন্য প্রযোজ্য।' 
                           : 'Powered by BDApps for Robi and Airtel subscribers.',
-                        style: const TextStyle(fontSize: 12.5, color: AppColors.textSecondary),
+                        style: const TextStyle(fontSize: 13.5, color: AppColors.textSecondary),
                       ),
                       const SizedBox(height: 16.0),
 
@@ -515,7 +535,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                               Expanded(
                                 child: Text(
                                   _errorMessage!,
-                                  style: const TextStyle(color: AppColors.error, fontSize: 12.5),
+                                  style: const TextStyle(color: AppColors.error, fontSize: 13.5),
                                 ),
                               ),
                             ],
@@ -619,7 +639,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                       Center(
                         child: Text(
                           isBn ? pricing.vatSdText ?? '+ ভ্যাট, এসডি ও এসসি প্রযোজ্য' : '+ VAT, SD & SC applicable',
-                          style: const TextStyle(fontSize: 11.5, color: AppColors.textSecondary),
+                          style: const TextStyle(fontSize: 13.5, color: AppColors.textSecondary),
                         ),
                       ),
                     ],

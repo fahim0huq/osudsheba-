@@ -8,7 +8,8 @@ const crypto = require('crypto');
 const http = require('http');
 const dotenv = require('dotenv');
 
-dotenv.config();
+const path = require('path');
+dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
 const SECRET_KEY = process.env.APPSPRO_WEBHOOK_SECRET || process.env.APPSPRO_SECRET_KEY || 'sk_sandbox_osudsheba_test';
 const PORT = 3001; // test server port
@@ -125,7 +126,8 @@ async function runTests() {
 
     // TEST 2: Status normalization
     assert(SubscriptionService.normalizeStatus('active').entitlementActive === true, 'normalizeStatus: active -> true');
-    assert(SubscriptionService.normalizeStatus('pending').entitlementActive === true, 'normalizeStatus: pending -> true');
+    assert(SubscriptionService.normalizeStatus('pending').entitlementActive === false, 'normalizeStatus: pending -> false (unpaid/insufficient balance)');
+    assert(SubscriptionService.normalizeStatus('INITIAL CHARGING PENDING').entitlementActive === false, 'normalizeStatus: INITIAL CHARGING PENDING -> false');
     assert(SubscriptionService.normalizeStatus('cancelled').entitlementActive === false, 'normalizeStatus: cancelled -> false');
     assert(SubscriptionService.normalizeStatus('unknown_status').entitlementActive === false, 'normalizeStatus: unknown -> false (fails closed)');
 
@@ -212,15 +214,43 @@ async function runTests() {
     });
     assert(resPremiumAllowed.status === 200 && resPremiumAllowed.body.success === true, 'Subscribed user allowed on premium endpoint with 200');
 
-    // TEST 13: Pending subscription allowed on Premium Endpoint
+    // TEST 13: Pending subscription BLOCKED on Premium Endpoint
     await SubscriptionService.saveSubscription('user_pending_test', {
       status: 'pending',
       phone: '01688888888',
     });
-    const resPendingAllowed = await sendHttpRequest('/test-premium-endpoint', 'POST', {
+    const resPendingBlocked = await sendHttpRequest('/test-premium-endpoint', 'POST', {
       'Authorization': 'Bearer mock_token_for_user_pending_test',
     });
-    assert(resPendingAllowed.status === 200 && resPendingAllowed.body.success === true, 'Pending subscription user allowed on premium endpoint with 200');
+    assert(resPendingBlocked.status === 403 && resPendingBlocked.body.error === 'SUBSCRIPTION_REQUIRED', 'Pending subscription user blocked from premium endpoint with 403 SUBSCRIPTION_REQUIRED');
+
+    // TEST 13b: Account deletion (DELETE /subscription/account)
+    const resDeleteUnauth = await sendHttpRequest('/subscription/account', 'DELETE', {});
+    assert(resDeleteUnauth.status === 401, 'Account deletion without a token rejected with 401');
+
+    const resDeleteActive = await sendHttpRequest('/subscription/account', 'DELETE', {
+      'Authorization': 'Bearer mock_token_for_user_premium_vip',
+    });
+    assert(resDeleteActive.status === 409 && resDeleteActive.body.error === 'SUBSCRIPTION_STILL_ACTIVE',
+      'Account deletion refused with 409 while the subscription is active (billing must be cancelled first)');
+    assert((await SubscriptionService.getSubscription('user_premium_vip')) !== null, 'Active subscription record kept after refused deletion');
+
+    const resDeletePending = await sendHttpRequest('/subscription/account', 'DELETE', {
+      'Authorization': 'Bearer mock_token_for_user_pending_test',
+    });
+    assert(resDeletePending.status === 409, 'Account deletion refused with 409 while the subscription is pending');
+
+    await SubscriptionService.saveSubscription('user_delete_me', { status: 'cancelled', phone: '01877777777' });
+    const resDeleteCancelled = await sendHttpRequest('/subscription/account', 'DELETE', {
+      'Authorization': 'Bearer mock_token_for_user_delete_me',
+    });
+    assert(resDeleteCancelled.status === 200 && resDeleteCancelled.body.deleted === true, 'Account deletion of a cancelled subscriber returns 200');
+    assert((await SubscriptionService.getSubscription('user_delete_me')) === null, 'Subscription record (with phone number) is gone after account deletion');
+
+    const resDeleteNone = await sendHttpRequest('/subscription/account', 'DELETE', {
+      'Authorization': 'Bearer mock_token_for_user_never_subscribed',
+    });
+    assert(resDeleteNone.status === 200 && resDeleteNone.body.deleted === false, 'Account deletion for a user with no subscription returns 200');
 
     // TEST 14: SMS & USSD Webhooks accepted safely
     const smsReq = createSignedWebhookRequest({

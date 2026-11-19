@@ -48,7 +48,9 @@ try {
 }
 
 // Local file store setup for dev/sandbox fallback
-const DATA_DIR = path.join(__dirname, '..', 'data');
+const DATA_DIR = process.env.SUBSCRIPTION_DATA_DIR
+  ? path.resolve(process.env.SUBSCRIPTION_DATA_DIR)
+  : path.join(__dirname, '..', 'data');
 const SUBS_FILE = path.join(DATA_DIR, 'subscriptions.json');
 const EVENTS_FILE = path.join(DATA_DIR, 'webhook_events.json');
 
@@ -86,7 +88,9 @@ function writeLocalData(file, data) {
 
 /**
  * Normalizes an external status to internal subscription state
- * AppsPro documentation: "valid is TRUE for both active and pending"
+ * Note: AppsPro returns valid: true when OTP matches, but pending / INITIAL CHARGING PENDING
+ * means carrier charging has not succeeded (e.g. insufficient airtime balance).
+ * Only confirmed active/registered status grants active entitlement.
  */
 function normalizeStatus(rawStatus) {
   if (!rawStatus || typeof rawStatus !== 'string') {
@@ -98,7 +102,7 @@ function normalizeStatus(rawStatus) {
     return { status: 'active', entitlementActive: true };
   }
   if (s === 'pending' || s.includes('pending')) {
-    return { status: 'pending', entitlementActive: true };
+    return { status: 'pending', entitlementActive: false };
   }
   if (s === 'cancelled' || s === 'unregistered' || s === 'deactivated') {
     return { status: 'cancelled', entitlementActive: false };
@@ -125,12 +129,13 @@ class SubscriptionService {
   static async getSubscription(uid) {
     if (!uid) return null;
 
+    let record = null;
     if (!useLocalFallback && firestoreDb) {
       try {
         const docRef = firestoreDb.collection('subscriptions').doc(uid);
         const docSnap = await docRef.get();
         if (docSnap.exists) {
-          return docSnap.data();
+          record = docSnap.data();
         }
       } catch (err) {
         console.warn(`[SubscriptionService] Firestore read failed (${err.message}), falling back to local store.`);
@@ -138,8 +143,17 @@ class SubscriptionService {
       }
     }
 
-    const localSubs = readLocalData(SUBS_FILE);
-    return localSubs[uid] || null;
+    if (!record) {
+      const localSubs = readLocalData(SUBS_FILE);
+      record = localSubs[uid] || null;
+    }
+
+    if (record) {
+      const { status, entitlementActive } = normalizeStatus(record.status || record.originalStatus);
+      record.status = status;
+      record.entitlementActive = entitlementActive;
+    }
+    return record;
   }
 
   /**
@@ -157,6 +171,7 @@ class SubscriptionService {
       cleanPhone = '0' + cleanPhone;
     }
 
+    let record = null;
     if (!useLocalFallback && firestoreDb) {
       try {
         const snapshot = await firestoreDb.collection('subscriptions')
@@ -164,7 +179,7 @@ class SubscriptionService {
           .limit(1)
           .get();
         if (!snapshot.empty) {
-          return snapshot.docs[0].data();
+          record = snapshot.docs[0].data();
         }
       } catch (err) {
         console.warn(`[SubscriptionService] Firestore phone query failed (${err.message}), trying local fallback.`);
@@ -172,18 +187,28 @@ class SubscriptionService {
       }
     }
 
-    const localSubs = readLocalData(SUBS_FILE);
-    for (const record of Object.values(localSubs)) {
-      if (record.phone === cleanPhone) {
-        return record;
+    if (!record) {
+      const localSubs = readLocalData(SUBS_FILE);
+      for (const r of Object.values(localSubs)) {
+        if (r.phone === cleanPhone) {
+          record = r;
+          break;
+        }
       }
     }
-    return null;
+
+    if (record) {
+      const { status, entitlementActive } = normalizeStatus(record.status || record.originalStatus);
+      record.status = status;
+      record.entitlementActive = entitlementActive;
+    }
+    return record;
   }
 
   static async findSubscriptionBySubscriberId(subscriberId) {
     if (!subscriberId) return null;
 
+    let record = null;
     if (!useLocalFallback && firestoreDb) {
       try {
         const snapshot = await firestoreDb.collection('subscriptions')
@@ -191,15 +216,15 @@ class SubscriptionService {
           .limit(1)
           .get();
         if (!snapshot.empty) {
-          return snapshot.docs[0].data();
-        }
-
-        const localSnapshot = await firestoreDb.collection('subscriptions')
-          .where('appsproLocalSubscriberId', '==', subscriberId)
-          .limit(1)
-          .get();
-        if (!localSnapshot.empty) {
-          return localSnapshot.docs[0].data();
+          record = snapshot.docs[0].data();
+        } else {
+          const localSnapshot = await firestoreDb.collection('subscriptions')
+            .where('appsproLocalSubscriberId', '==', subscriberId)
+            .limit(1)
+            .get();
+          if (!localSnapshot.empty) {
+            record = localSnapshot.docs[0].data();
+          }
         }
       } catch (err) {
         console.warn(`[SubscriptionService] Firestore query failed (${err.message}), trying local fallback.`);
@@ -207,13 +232,22 @@ class SubscriptionService {
       }
     }
 
-    const localSubs = readLocalData(SUBS_FILE);
-    for (const record of Object.values(localSubs)) {
-      if (record.appsproSubscriberId === subscriberId || record.appsproLocalSubscriberId === subscriberId) {
-        return record;
+    if (!record) {
+      const localSubs = readLocalData(SUBS_FILE);
+      for (const r of Object.values(localSubs)) {
+        if (r.appsproSubscriberId === subscriberId || r.appsproLocalSubscriberId === subscriberId) {
+          record = r;
+          break;
+        }
       }
     }
-    return null;
+
+    if (record) {
+      const { status, entitlementActive } = normalizeStatus(record.status || record.originalStatus);
+      record.status = status;
+      record.entitlementActive = entitlementActive;
+    }
+    return record;
   }
 
   /**
@@ -265,6 +299,38 @@ class SubscriptionService {
 
     console.log(`[SubscriptionService] Saved subscription for ${uid}: status=${status}, entitlementActive=${entitlementActive}`);
     return subscriptionRecord;
+  }
+
+  /**
+   * Permanently delete a user's subscription record (in-app account deletion).
+   * Throws if Firestore is in use and the delete fails, so the caller never reports
+   * "deleted" while the record (with the user's phone number) still exists.
+   */
+  static async deleteSubscription(uid) {
+    if (!uid) throw new Error('Cannot delete subscription without a valid UID');
+
+    if (!useLocalFallback && firestoreDb) {
+      await firestoreDb.collection('subscriptions').doc(uid).delete();
+    }
+
+    const localSubs = readLocalData(SUBS_FILE);
+    if (localSubs[uid]) {
+      delete localSubs[uid];
+      writeLocalData(SUBS_FILE, localSubs);
+    }
+    console.log(`[SubscriptionService] Deleted subscription record for ${uid}`);
+  }
+
+  /**
+   * Deletes the user's medicines / dose-history backup (users/{uid} and everything under
+   * it), written by the app's cloud backup. Admin SDK, so it works whatever the rules say.
+   * No-op when Firestore is not configured (local tests): there is no backup to delete.
+   */
+  static async deleteUserBackup(uid) {
+    if (!uid) throw new Error('Cannot delete backup without a valid UID');
+    if (useLocalFallback || !firestoreDb) return;
+    await firestoreDb.recursiveDelete(firestoreDb.collection('users').doc(uid));
+    console.log(`[SubscriptionService] Deleted cloud backup for ${uid}`);
   }
 
   /**

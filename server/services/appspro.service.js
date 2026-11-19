@@ -9,9 +9,41 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const BASE_URL = (process.env.APPSPRO_BASE_URL || 'https://api.appspro.dev/api/v1').replace(/\/$/, '');
-const SECRET_KEY = process.env.APPSPRO_SECRET_KEY || '';
-const PUBLISHABLE_KEY = process.env.APPSPRO_PUBLISHABLE_KEY || '';
+const SECRET_KEY = (process.env.APPSPRO_SECRET_KEY || '').trim();
+const PUBLISHABLE_KEY = (process.env.APPSPRO_PUBLISHABLE_KEY || '').trim();
 const TIMEOUT_MS = 30000;
+
+/**
+ * Local OTP/subscription simulation (OTP "000000", ref_sandbox_* references) grants a
+ * subscription WITHOUT charging anyone. It must therefore be an explicit opt-in that can
+ * never be active on a live server by accident:
+ *   - APPSPRO_ALLOW_SIMULATION must be exactly "true", AND
+ *   - NODE_ENV must not be "production".
+ * (Previously any server where APPSPRO_ENV was not literally "production" accepted 000000.)
+ */
+function sandboxSimulationAllowed() {
+  return process.env.APPSPRO_ALLOW_SIMULATION === 'true' && process.env.NODE_ENV !== 'production';
+}
+
+/**
+ * Get safe fingerprint for publishable key: first 6 + last 4 chars
+ */
+function getPublishableKeyFingerprint(key = PUBLISHABLE_KEY) {
+  if (!key || typeof key !== 'string') return '(not set)';
+  const clean = key.trim();
+  if (clean.length <= 10) return '****';
+  return `${clean.slice(0, 6)}...${clean.slice(-4)}`;
+}
+
+/**
+ * Get safe fingerprint for secret key: first 4 + last 4 chars
+ */
+function getSecretKeyFingerprint(key = SECRET_KEY) {
+  if (!key || typeof key !== 'string') return '(not set)';
+  const clean = key.trim();
+  if (clean.length <= 8) return '****';
+  return `${clean.slice(0, 4)}...${clean.slice(-4)}`;
+}
 
 /**
  * Mask phone number for secure logging (e.g. 01712***678)
@@ -98,11 +130,17 @@ class AppsProService {
    * Fetch application metadata and current pricing
    */
   static async getAppInfo() {
+    const maskedKey = getPublishableKeyFingerprint(PUBLISHABLE_KEY);
+    const maskedPath = `/sdk/app-info?publishable_key=${maskedKey}`;
+    console.log(`[AppsPro Diagnostics] Requesting getAppInfo: ${maskedPath}`);
     try {
       // app-info accepts query param publishable_key or Bearer token
       const query = PUBLISHABLE_KEY ? `?publishable_key=${encodeURIComponent(PUBLISHABLE_KEY)}` : '';
-      return await appsproFetch(`/sdk/app-info${query}`, { method: 'GET' });
+      const data = await appsproFetch(`/sdk/app-info${query}`, { method: 'GET' });
+      console.log('[AppsPro Diagnostics] getAppInfo OK (HTTP 200).');
+      return data;
     } catch (err) {
+      console.error(`[AppsPro Diagnostics] getAppInfo response (HTTP ${err.status || 500}):`, JSON.stringify(err.data || err.message));
       console.warn('[AppsPro] getAppInfo failed, returning fallback metadata:', err.message);
       return {
         app_id: process.env.APPSPRO_APP_ID || 'osudsheba',
@@ -123,6 +161,79 @@ class AppsProService {
   }
 
   /**
+   * Test protected AppsPro API (/sdk/subscribers) using configured secret key
+   * Safely logs HTTP status and response body (NEVER exposes secret key).
+   */
+  static async testProtectedSubscribers() {
+    console.log(`[AppsPro Diagnostics] Testing protected /sdk/subscribers with configured secret key...`);
+    try {
+      // Only report whether the secret key is accepted. The response body contains subscriber
+      // records (phone numbers), so it is never logged or returned.
+      await appsproFetch('/sdk/subscribers?limit=1', { method: 'GET' });
+      console.log('[AppsPro Diagnostics] /sdk/subscribers reachable with configured secret key (HTTP 200).');
+      return { status: 200, ok: true };
+    } catch (err) {
+      console.error(`[AppsPro Diagnostics] /sdk/subscribers failed (HTTP ${err.status || 500}): ${err.message}`);
+      return { status: err.status || 500, ok: false, error: err.message };
+    }
+  }
+
+  /**
+   * Log startup configuration safely without printing full secrets
+   */
+  static logStartupDiagnostics() {
+    console.log('\n======================================================');
+    console.log('       APPSPRO RUNTIME CONFIGURATION DIAGNOSTICS      ');
+    console.log('======================================================');
+    console.log(`- APPSPRO_BASE_URL:               ${BASE_URL}`);
+    console.log(`- APPSPRO_ENV:                    ${process.env.APPSPRO_ENV || '(not set)'}`);
+    console.log(`- APPSPRO_PUBLISHABLE_KEY exists: ${Boolean(PUBLISHABLE_KEY)}`);
+    console.log(`- Publishable Key Fingerprint:    ${getPublishableKeyFingerprint(PUBLISHABLE_KEY)}`);
+    console.log(`- Publishable Key Length:         ${PUBLISHABLE_KEY ? PUBLISHABLE_KEY.length : 0}`);
+    console.log(`- APPSPRO_SECRET_KEY exists:      ${Boolean(SECRET_KEY)}`);
+    console.log(`- Secret Key Fingerprint:         ${getSecretKeyFingerprint(SECRET_KEY)}`);
+    console.log(`- Secret Key Length:              ${SECRET_KEY ? SECRET_KEY.length : 0}`);
+    console.log('======================================================\n');
+  }
+
+  /**
+   * Run full non-sensitive diagnostics for safe endpoint inspection
+   */
+  static async runDiagnostics() {
+    let appInfoTest = null;
+    try {
+      const query = PUBLISHABLE_KEY ? `?publishable_key=${encodeURIComponent(PUBLISHABLE_KEY)}` : '';
+      const data = await appsproFetch(`/sdk/app-info${query}`, { method: 'GET' });
+      appInfoTest = { status: 200, data };
+    } catch (err) {
+      appInfoTest = { status: err.status || 500, data: err.data || err.message };
+    }
+
+    const subscribersTest = await AppsProService.testProtectedSubscribers();
+
+    return {
+      runtime: {
+        APPSPRO_BASE_URL: BASE_URL,
+        APPSPRO_ENV: process.env.APPSPRO_ENV || '(not set)',
+        publishableKey: {
+          exists: Boolean(PUBLISHABLE_KEY),
+          fingerprint: getPublishableKeyFingerprint(PUBLISHABLE_KEY),
+          length: PUBLISHABLE_KEY ? PUBLISHABLE_KEY.length : 0,
+        },
+        secretKey: {
+          exists: Boolean(SECRET_KEY),
+          fingerprint: getSecretKeyFingerprint(SECRET_KEY),
+          length: SECRET_KEY ? SECRET_KEY.length : 0,
+        },
+      },
+      tests: {
+        appInfo: appInfoTest,
+        subscribers: subscribersTest,
+      },
+    };
+  }
+
+  /**
    * Request OTP for subscription
    */
   static async requestOtp(phone, externalUserId) {
@@ -135,7 +246,7 @@ class AppsProService {
           external_user_id: externalUserId,
         }),
       });
-      if ((process.env.APPSPRO_ENV === 'sandbox' || process.env.APPSPRO_ENV === 'development' || process.env.NODE_ENV !== 'production') && (!res.reference_no || (res.status_code && res.status_code.startsWith('E')))) {
+      if (sandboxSimulationAllowed() && (!res.reference_no || (res.status_code && res.status_code.startsWith('E')))) {
         console.warn(`[AppsPro Sandbox] Upstream status (${res.status_code}: ${res.status_detail || 'Non-whitelisted'}). Using local Sandbox OTP simulation (use 000000).`);
         return {
           success: true,
@@ -147,7 +258,7 @@ class AppsProService {
       }
       return res;
     } catch (err) {
-      if (process.env.APPSPRO_ENV === 'sandbox' || process.env.APPSPRO_ENV === 'development' || process.env.NODE_ENV !== 'production') {
+      if (sandboxSimulationAllowed()) {
         console.warn(`[AppsPro Dev/Sandbox] Upstream error (${err.message}). Using local Sandbox OTP simulation (use 000000).`);
         return {
           success: true,
@@ -168,7 +279,7 @@ class AppsProService {
     console.log(`[AppsPro] Verifying OTP for ref: ${referenceNo}, external_user_id: ${externalUserId}`);
 
     // Intercept local sandbox simulation references before upstream call
-    if ((referenceNo && referenceNo.startsWith('ref_sandbox_')) || (process.env.APPSPRO_ENV !== 'production' && otp === '000000')) {
+    if (sandboxSimulationAllowed() && ((referenceNo && referenceNo.startsWith('ref_sandbox_')) || otp === '000000')) {
       if (otp === '000000') {
         console.log(`[AppsPro Sandbox] Verified simulated OTP ${otp} for ref: ${referenceNo}`);
         const subId = `sub_sandbox_${Buffer.from(externalUserId || 'user').toString('hex').slice(0, 12)}`;
@@ -199,7 +310,7 @@ class AppsProService {
       });
       return res;
     } catch (err) {
-      if (process.env.APPSPRO_ENV === 'sandbox') {
+      if (sandboxSimulationAllowed()) {
         if (otp === '000000' || (referenceNo && referenceNo.startsWith('ref_sandbox_') && otp.length === 6)) {
           console.log(`[AppsPro Sandbox] Verified simulated OTP ${otp} for ref: ${referenceNo}`);
           const subId = `sub_sandbox_${Buffer.from(externalUserId || 'user').toString('hex').slice(0, 12)}`;
@@ -229,7 +340,7 @@ class AppsProService {
         method: 'GET',
       });
     } catch (err) {
-      if (process.env.APPSPRO_ENV === 'sandbox' && subscriberId && subscriberId.startsWith('sub_sandbox_')) {
+      if (sandboxSimulationAllowed() && subscriberId && subscriberId.startsWith('sub_sandbox_')) {
         return {
           success: true,
           subscriber_id: subscriberId,
@@ -281,7 +392,7 @@ class AppsProService {
         }),
       });
     } catch (err) {
-      if (process.env.APPSPRO_ENV === 'sandbox') {
+      if (sandboxSimulationAllowed()) {
         console.log(`[AppsPro Sandbox] Unsubscribed simulated subscriber: ${maskPhone(phone)}`);
         return {
           success: true,
@@ -317,5 +428,8 @@ class AppsProService {
 
 module.exports = {
   AppsProService,
+  sandboxSimulationAllowed,
   maskPhone,
+  getPublishableKeyFingerprint,
+  getSecretKeyFingerprint,
 };

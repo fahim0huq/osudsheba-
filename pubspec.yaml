@@ -1,5 +1,5 @@
 name: osudsheba
-description: "A new Flutter project."
+description: "OsudSheba — medicine reminders for older adults and their families in Bangladesh."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -53,7 +53,11 @@ dependencies:
   firebase_core: ^4.14.0
   firebase_auth: ^6.6.0
   google_sign_in: ^7.2.0
+  # Opens the phone dialer / SMS app for "Call family" and caregiver invites (no call permission needed).
+  url_launcher: ^6.3.1
   appspro_sdk: ^0.1.0
+  cloud_firestore: ^6.10.2
+  firebase_messaging: ^16.7.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -87,6 +91,10 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # Bangladesh medicine list for Scan (CC BY 4.0, see tools/build_medicine_list.py).
+  assets:
+    - assets/data/bd_medicines.tsv
 
   # To add assets to your application, add an assets section, like this:
   # assets:

@@ -69,6 +69,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
     });
     _waitStart = DateTime.now();
     _pollTimer = Timer.periodic(const Duration(seconds: 5), (_) => _pollOnce());
+    _pollOnce(); // ask once straight away ("Check again" should not wait 5 s)
   }
 
   void _stopWaiting() {
@@ -109,8 +110,11 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
           : 'Your operator did not start the subscription. Check your balance and try again.');
       return;
     }
-    if (DateTime.now().difference(_waitStart ?? DateTime.now()) > const Duration(seconds: 90)) {
+    // After 90 s explain the delay, but keep checking (less often) so the screen still
+    // unlocks by itself when the operator's charge lands, as the message promises.
+    if (!_waitTimedOut && DateTime.now().difference(_waitStart ?? DateTime.now()) > const Duration(seconds: 90)) {
       _pollTimer?.cancel();
+      _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) => _pollOnce());
       setState(() => _waitTimedOut = true);
     }
   }

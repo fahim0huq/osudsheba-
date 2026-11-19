@@ -75,6 +75,7 @@ async function recheckWithAppsPro(uid, sub) {
   const last = Date.parse(sub.lastVerifiedAt || '') || 0;
   const wasPending = !sub.entitlementActive && sub.status === 'pending';
   if (Date.now() - last < (wasPending ? PENDING_RECHECK_MS : RECHECK_MS)) return sub;
+  if (wasPending) return recheckPending(uid, sub);
   let status = null;
   try {
     if (sub.phone) {
@@ -94,15 +95,51 @@ async function recheckWithAppsPro(uid, sub) {
   }
   if (!status) return sub;
   const { status: normalized, entitlementActive } = SubscriptionService.normalizeStatus(status);
-  if (entitlementActive) {
-    if (wasPending) console.log(`[SubscriptionController] Re-check: ${uid} charge confirmed (${status}); premium unlocked.`);
-    return SubscriptionService.saveSubscription(uid, wasPending ? { status } : {});
-  }
-  if (normalized === 'pending') {
-    return SubscriptionService.saveSubscription(uid, {}); // still waiting: refresh lastVerifiedAt
+  if (entitlementActive || normalized === 'pending') {
+    return SubscriptionService.saveSubscription(uid, {}); // unchanged: refresh lastVerifiedAt
   }
   console.log(`[SubscriptionController] Re-check: ${uid} is now ${status} at the operator; premium removed.`);
   return SubscriptionService.saveSubscription(uid, { status });
+}
+
+/**
+ * OTP done, operator still charging. Two sources are asked, because either can be first to
+ * know about the charge: the live BDApps status by phone, and AppsPro's own subscriber
+ * record (updated by BDApps' charge notification). Either one saying active unlocks premium.
+ * While pending, nothing here ever cancels the attempt: an early UNREGISTERED or an error just
+ * keeps it pending, so a charged user is never sent back to a fresh OTP.
+ */
+async function recheckPending(uid, sub) {
+  const seen = [];
+  const sources = [];
+  if (sub.phone) {
+    sources.push(['live', async () => {
+      const live = await AppsProService.getLiveStatusByPhone(sub.phone);
+      return live?.subscription_status || live?.raw?.subscriptionStatus || null;
+    }]);
+  }
+  if (sub.appsproSubscriberId) {
+    sources.push(['appspro', async () => {
+      const v = await AppsProService.getSubscriberStatus(sub.appsproSubscriberId);
+      return v?.subscriber?.status || v?.status || null;
+    }]);
+  }
+  for (const [name, ask] of sources) {
+    let status = null;
+    try {
+      status = await ask();
+    } catch (err) {
+      seen.push(`${name}=error(${err.status || ''} ${err.message})`);
+      continue;
+    }
+    seen.push(`${name}=${status}`);
+    if (status && SubscriptionService.normalizeStatus(status).entitlementActive) {
+      console.log(`[SubscriptionController] Re-check: ${uid} charge confirmed (${seen.join(', ')}); premium unlocked.`);
+      return SubscriptionService.saveSubscription(uid, { status: 'active', subscribedAt: new Date().toISOString() });
+    }
+  }
+  console.log(`[SubscriptionController] Re-check: ${uid} still pending (${seen.join(', ') || 'no source'}).`);
+  return SubscriptionService.saveSubscription(uid, {}); // refresh lastVerifiedAt
 }
 
 class SubscriptionController {
@@ -348,11 +385,25 @@ class SubscriptionController {
         normalizeBangladeshPhone(result.phone || '');
       if (pending) pendingOtps.delete(String(referenceNo));
 
-      const { status: normalizedStatus, entitlementActive } = SubscriptionService.normalizeStatus(rawStatus);
+      let { status: normalizedStatus, entitlementActive } = SubscriptionService.normalizeStatus(rawStatus);
+      // The charge notification (webhook) can arrive before this reply. If it already made
+      // this same subscription active, do not overwrite it with the reply's older "pending".
+      let savedStatus = rawStatus;
+      if (normalizedStatus === 'pending') {
+        const existing = await SubscriptionService.getSubscription(uid);
+        if (existing && existing.entitlementActive &&
+            ((subscriberId && existing.appsproSubscriberId === subscriberId) ||
+             (subscriberPhone && existing.phone === subscriberPhone))) {
+          console.log(`[SubscriptionController] Verify said ${rawStatus} but ${uid} is already active (webhook first).`);
+          savedStatus = 'active';
+          normalizedStatus = 'active';
+          entitlementActive = true;
+        }
+      }
 
       // Save subscription record with authoritative status
       const savedRecord = await SubscriptionService.saveSubscription(uid, {
-        status: rawStatus,
+        status: savedStatus,
         appsproSubscriberId: subscriberId,
         appsproLocalSubscriberId: localSubscriberId,
         phone: subscriberPhone,

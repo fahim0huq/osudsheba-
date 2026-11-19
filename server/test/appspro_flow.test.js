@@ -176,6 +176,33 @@ async function run() {
     eq(store.u1.status, 'active', 'saved active');
   });
 
+  await test('pending: AppsPro record says active while the live status call fails -> unlocks', async () => {
+    const before = new Date(Date.now() - 30 * 1000).toISOString();
+    store = { u1: { uid: 'u1', phone: '01812345678', appsproSubscriberId: 'tel:8801812345678', status: 'pending', entitlementActive: false, lastVerifiedAt: before } };
+    AppsProService.getLiveStatusByPhone = async () => { const e = new Error('not enabled'); e.status = 403; throw e; };
+    AppsProService.getSubscriberStatus = async () => ({ valid: true, subscriber: { status: 'active' } });
+    eq((await call(SubscriptionController.getStatus)).body.valid, true, 'unlocked');
+    eq(store.u1.status, 'active', 'saved active');
+  });
+
+  await test('pending: an early UNREGISTERED never cancels the attempt (stays pending)', async () => {
+    const before = new Date(Date.now() - 30 * 1000).toISOString();
+    store = { u1: { uid: 'u1', phone: '01812345678', appsproSubscriberId: 'tel:8801812345678', status: 'pending', entitlementActive: false, lastVerifiedAt: before } };
+    AppsProService.getLiveStatusByPhone = async () => ({ subscription_status: 'UNREGISTERED' });
+    AppsProService.getSubscriberStatus = async () => ({ valid: false, subscriber: { status: 'pending' } });
+    await call(SubscriptionController.getStatus);
+    eq(store.u1.status, 'pending', 'still pending');
+  });
+
+  await test('verify replying "pending" does not undo a plan the charge webhook already activated', async () => {
+    store = { u1: { uid: 'u1', phone: '01812345678', appsproSubscriberId: 'tel:8801812345678', status: 'active', entitlementActive: true, lastVerifiedAt: new Date().toISOString() } };
+    _pendingOtps.set('refW', { uid: 'u1', phone: '01812345678', expiresAt: Date.now() + 60000 });
+    AppsProService.verifyOtp = async () => ({ subscription_status: 'INITIAL CHARGING PENDING', subscriber_id: 'tel:8801812345678' });
+    const r = await call(SubscriptionController.verifyOtp, { body: { reference_no: 'refW', otp: '123456' } });
+    eq(r.body.entitlementActive, true, 'reply active');
+    eq(store.u1.status, 'active', 'kept active');
+  });
+
   const { processEvent } = require('../webhooks/appspro.webhook');
 
   await test('webhook: subscriber.created at OTP request does not grant premium', async () => {

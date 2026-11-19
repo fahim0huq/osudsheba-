@@ -22,9 +22,12 @@ class FamilyMember {
 
 /// Someone I look after.
 class CaredPerson {
-  const CaredPerson({required this.uid, required this.name});
+  const CaredPerson({required this.uid, required this.name, this.phone});
   final String uid;
   final String name;
+  /// Their mobile number, typed by the caregiver for SMS reminders. Kept only in the
+  /// caregiver's own data (users/{me}/caring/{them}); never read from the patient's account.
+  final String? phone;
 }
 
 /// A reminder a caregiver sent me.
@@ -165,8 +168,17 @@ class FamilyService {
 
   Stream<List<CaredPerson>> watchCaring(String myUid) =>
       _user(myUid).collection('caring').snapshots().map((s) => [
-            for (final d in s.docs) CaredPerson(uid: d.id, name: d.data()['patientName'] as String? ?? '?'),
+            for (final d in s.docs)
+              CaredPerson(
+                uid: d.id,
+                name: d.data()['patientName'] as String? ?? '?',
+                phone: d.data()['phone'] as String?,
+              ),
           ]);
+
+  /// Saves the number the caregiver uses to text [patientUid] (only in the caregiver's own data).
+  Future<void> savePatientPhone({required String myUid, required String patientUid, required String phone}) =>
+      _guard(() => _user(myUid).collection('caring').doc(patientUid).set({'phone': phone}, SetOptions(merge: true)));
 
   /// 'active', 'pending', or null when the person removed me (or never approved).
   Stream<String?> watchMyAccess({required String patientUid, required String myUid}) =>

@@ -5,12 +5,15 @@ import 'package:go_router/go_router.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/providers/family_providers.dart';
 import '../../../core/services/family_service.dart';
+import '../../../core/services/phone_actions.dart';
+import '../../../core/utils/caregiver_sms.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../core/utils/care_view.dart';
 import '../../../shared/widgets/app_primary_button.dart';
 import '../../../shared/widgets/confirm_dialog.dart';
 import 'care_widgets.dart';
 import 'invite_family_screen.dart';
+import 'reminder_sheet.dart';
 
 /// A caregiver's live view of someone they look after: what to take now, today's doses,
 /// the last 7 days, their medicines, and "Send reminder".
@@ -24,6 +27,7 @@ class CarePersonScreen extends ConsumerStatefulWidget {
 
 class _CarePersonScreenState extends ConsumerState<CarePersonScreen> {
   Timer? _tick;
+  late String? _phone = widget.person.phone;
 
   @override
   void initState() {
@@ -79,6 +83,28 @@ class _CarePersonScreenState extends ConsumerState<CarePersonScreen> {
     final service = ref.read(familyServiceProvider);
     if (uid == null || service == null) return;
     final me = ref.read(userProfileProvider).name.trim();
+
+    final method = await showReminderMethodSheet(context, bn: _bn, phone: _phone);
+    if (method == null || !mounted) return;
+    if (method != ReminderMethod.notification) {
+      // SMS goes from the caregiver's own phone and SIM: the messaging app opens with the
+      // number and text filled in, and they press Send there.
+      var phone = _phone;
+      if (phone == null || method == ReminderMethod.changeNumber) {
+        phone = await askMobileNumber(context, bn: _bn, name: widget.person.name, current: phone);
+        if (phone == null || !mounted) return;
+        setState(() => _phone = phone);
+        try {
+          await service.savePatientPhone(myUid: uid, patientUid: widget.person.uid, phone: phone);
+        } catch (_) {
+          // Not saved for next time; the SMS can still be sent now.
+        }
+        if (!mounted) return;
+      }
+      await PhoneActions.sms(context, phone, caregiverSmsBody(message: message, fromName: me, bn: _bn),
+          lang: _bn ? 'bn' : 'en');
+      return;
+    }
     String text;
     try {
       final pushed = await service.sendReminder(

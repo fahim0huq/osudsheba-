@@ -149,7 +149,7 @@ class CaregiverPatientDetailScreen extends ConsumerWidget {
                             Text(
                               lang == 'bn' ? 'অগ্রগতির স্কোর' : 'Compliance Rate',
                               textAlign: TextAlign.center,
-                              style: const TextStyle(fontSize: 12.0, fontWeight: FontWeight.bold, color: AppColors.textSecondary),
+                              style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold, color: AppColors.textSecondary),
                             ),
                             const SizedBox(height: 6.0),
                             Text(
@@ -174,7 +174,7 @@ class CaregiverPatientDetailScreen extends ConsumerWidget {
                             Text(
                               lang == 'bn' ? 'সর্বশেষ মিস ডোজ' : 'Last Missed Dose',
                               textAlign: TextAlign.center,
-                              style: const TextStyle(fontSize: 12.0, fontWeight: FontWeight.bold, color: AppColors.textSecondary),
+                              style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold, color: AppColors.textSecondary),
                             ),
                             const SizedBox(height: 6.0),
                             Text(
@@ -182,7 +182,7 @@ class CaregiverPatientDetailScreen extends ConsumerWidget {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
-                                fontSize: 12.0,
+                                fontSize: 13.5,
                                 fontWeight: FontWeight.bold,
                                 color: (medicines.isEmpty || stats.totalLogs == 0 || missedDoseText == (lang == 'bn' ? 'কোনো মিস ডোজ নেই' : 'No missed doses'))
                                     ? AppColors.textSecondary
@@ -282,7 +282,7 @@ class CaregiverPatientDetailScreen extends ConsumerWidget {
                                 const SizedBox(height: 2.0),
                                 Text(
                                   'Schedule: ${med.times.join(", ")}',
-                                  style: const TextStyle(fontSize: 12.0, color: AppColors.textSecondary, fontWeight: FontWeight.w500),
+                                  style: const TextStyle(fontSize: 13.5, color: AppColors.textSecondary, fontWeight: FontWeight.w500),
                                 ),
                               ],
                             ),
@@ -295,7 +295,7 @@ class CaregiverPatientDetailScreen extends ConsumerWidget {
                             ),
                             child: Text(
                               med.status,
-                              style: TextStyle(color: statusColor, fontSize: 11.0, fontWeight: FontWeight.bold),
+                              style: TextStyle(color: statusColor, fontSize: 13.5, fontWeight: FontWeight.bold),
                             ),
                           ),
                         ],

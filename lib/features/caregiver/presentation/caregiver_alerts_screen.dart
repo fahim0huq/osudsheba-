@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/utils/alert_text.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../shared/widgets/fade_slide_in.dart';
@@ -138,18 +139,18 @@ class CaregiverAlertsScreen extends ConsumerWidget {
                                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                             children: [
                                               Text(
-                                                alert.severity.toUpperCase(),
+                                                alertSeverityText(alert, lang),
                                                 style: TextStyle(
                                                   color: severityColor,
                                                   fontWeight: FontWeight.bold,
-                                                  fontSize: 12.0,
+                                                  fontSize: 13.5,
                                                 ),
                                               ),
                                               Text(
-                                                alert.time,
+                                                alertTimeText(alert, lang, DateTime.now()),
                                                 style: const TextStyle(
                                                   color: AppColors.textSecondary,
-                                                  fontSize: 12.0,
+                                                  fontSize: 13.5,
                                                   fontWeight: FontWeight.w500,
                                                 ),
                                               ),
@@ -157,7 +158,7 @@ class CaregiverAlertsScreen extends ConsumerWidget {
                                           ),
                                           const SizedBox(height: 6.0),
                                           Text(
-                                            alert.title,
+                                            alertTitleText(alert, lang),
                                             style: const TextStyle(
                                               fontWeight: FontWeight.bold,
                                               fontSize: 15.0,
@@ -166,7 +167,7 @@ class CaregiverAlertsScreen extends ConsumerWidget {
                                           ),
                                           const SizedBox(height: 4.0),
                                           Text(
-                                            alert.message,
+                                            alertMessageText(alert, lang),
                                             style: const TextStyle(
                                               fontSize: 13.0,
                                               height: 1.3,

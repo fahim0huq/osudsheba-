@@ -1,0 +1,111 @@
+rules_version = '2';
+
+// OsudSheba Firestore rules (see docs/FAMILY_SHARING_PLAN.md).
+//  - Each user reads and writes their own backup: users/{uid}/medicines, users/{uid}/doseLogs.
+//  - Family: a patient invites with a one-time code, the caregiver asks to join, the patient
+//    approves. An approved ("active") caregiver may READ the patient's medicines and dose
+//    logs and send them reminders. Nothing else is shared; only the patient writes their data.
+//  - Everything else (the server's `subscriptions` and webhook collections, which the server
+//    reaches with the Admin SDK) is closed to the app.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function familyDoc(patientUid) {
+      return /databases/$(database)/documents/users/$(patientUid)/family/$(request.auth.uid);
+    }
+
+    // The signed-in user is an approved caregiver of this patient.
+    function isActiveFamily(patientUid) {
+      return signedIn()
+        && exists(familyDoc(patientUid))
+        && get(familyDoc(patientUid)).data.status == 'active';
+    }
+
+    // A record must name itself and carry a numeric change time; keeps junk out.
+    function validRecord(id) {
+      return request.resource.data.id == id
+        && request.resource.data.syncUpdatedAt is int
+        && request.resource.size() < 20 * 1024;
+    }
+
+    // ---- The user's own backup (caregivers may read) ----
+    match /users/{uid}/medicines/{id} {
+      allow read: if isOwner(uid) || isActiveFamily(uid);
+      allow delete: if isOwner(uid);
+      allow create, update: if isOwner(uid) && validRecord(id);
+    }
+
+    match /users/{uid}/doseLogs/{id} {
+      allow read: if isOwner(uid) || isActiveFamily(uid);
+      allow delete: if isOwner(uid);
+      allow create, update: if isOwner(uid) && validRecord(id);
+    }
+
+    // ---- Invites: fetched by exact code only, never listed ----
+    match /invites/{code} {
+      allow get: if signedIn();
+      allow create: if signedIn()
+        && code.size() == 8
+        && request.resource.data.patientUid == request.auth.uid
+        && request.resource.data.patientName is string
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt < request.time + duration.value(3, 'd');
+      allow delete: if signedIn() && resource.data.patientUid == request.auth.uid;
+    }
+
+    // ---- Who can see a patient: users/{patientUid}/family/{caregiverUid} ----
+    match /users/{patientUid}/family/{caregiverUid} {
+      allow read: if isOwner(patientUid) || isOwner(caregiverUid);
+
+      // The caregiver asks to join, holding a valid, unexpired invite from this patient.
+      allow create: if isOwner(caregiverUid)
+        && caregiverUid != patientUid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.inviteCode is string
+        && request.resource.data.caregiverName is string
+        && get(/databases/$(database)/documents/invites/$(request.resource.data.inviteCode)).data.patientUid == patientUid
+        && get(/databases/$(database)/documents/invites/$(request.resource.data.inviteCode)).data.expiresAt > request.time;
+
+      // Only the patient approves.
+      allow update: if isOwner(patientUid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'approvedAt'])
+        && request.resource.data.status == 'active';
+
+      // Either side can end it.
+      allow delete: if isOwner(patientUid) || isOwner(caregiverUid);
+    }
+
+    // ---- People I look after (the caregiver's own list) ----
+    match /users/{uid}/caring/{patientUid} {
+      allow read, write: if isOwner(uid);
+    }
+
+    // ---- Reminders sent by a caregiver to the patient ----
+    match /users/{patientUid}/nudges/{id} {
+      allow read, delete: if isOwner(patientUid);
+      allow create: if isActiveFamily(patientUid)
+        && request.resource.data.fromUid == request.auth.uid
+        && request.resource.data.fromName is string
+        && request.resource.data.message is string
+        && request.resource.data.message.size() <= 200
+        && request.resource.data.sentAt is timestamp;
+    }
+
+    // ---- Push notification tokens (the server reads them with the Admin SDK) ----
+    match /users/{uid}/devices/{token} {
+      allow read, write: if isOwner(uid);
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

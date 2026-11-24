@@ -57,6 +57,16 @@ class AppSettingsNotifier extends StateNotifier<AppSettings> {
     _storage.saveSettings(state);
   }
 
+  void setFullScreenAlarms(bool enabled) {
+    state = state.copyWith(fullScreenAlarms: enabled);
+    _storage.saveSettings(state);
+  }
+
+  void setRefillAlertDays(int days) {
+    state = state.copyWith(refillAlertDays: days);
+    _storage.saveSettings(state);
+  }
+
   void setOnboardingCompleted(bool completed) {
     state = state.copyWith(onboardingCompleted: completed);
     _storage.saveSettings(state);

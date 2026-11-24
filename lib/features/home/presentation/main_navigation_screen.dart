@@ -10,75 +10,47 @@ import '../../adherence/presentation/adherence_dashboard_screen.dart';
 import '../../caregiver/presentation/caregiver_dashboard_screen.dart';
 
 class MainNavigationScreen extends ConsumerStatefulWidget {
+  /// The router's tab shell. Tests build the screen without one ([initialTab] then picks
+  /// the tab and the tabs are switched here).
+  final StatefulNavigationShell? navigationShell;
   final int initialTab;
-  const MainNavigationScreen({super.key, this.initialTab = 0});
+  const MainNavigationScreen({super.key, this.navigationShell, this.initialTab = 0});
 
   @override
   ConsumerState<MainNavigationScreen> createState() => _MainNavigationScreenState();
 }
 
 class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
-  late int _currentIndex;
+  late int _localIndex = widget.initialTab;
 
-  @override
-  void initState() {
-    super.initState();
-    _currentIndex = widget.initialTab;
-  }
-
-  @override
-  void didUpdateWidget(MainNavigationScreen oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.initialTab != oldWidget.initialTab) {
-      _currentIndex = widget.initialTab;
-    }
-  }
+  int get _currentIndex => widget.navigationShell?.currentIndex ?? _localIndex;
 
   void _onTabTapped(int index) {
-    if (_currentIndex == index) return;
-    
-    setState(() {
-      _currentIndex = index;
-    });
-
-    // Update GoRouter to keep current route matched and back history logical
-    switch (index) {
-      case 0:
-        context.go('/home');
-        break;
-      case 1:
-        context.go('/add-medicine');
-        break;
-      case 2:
-        context.go('/upload-prescription');
-        break;
-      case 3:
-        context.go('/adherence');
-        break;
-      case 4:
-        context.go('/caregiver');
-        break;
+    final shell = widget.navigationShell;
+    if (shell != null) {
+      // Same tab again: back to that tab's first screen. Otherwise just swap tabs.
+      shell.goBranch(index, initialLocation: index == shell.currentIndex);
+      return;
     }
+    if (_localIndex != index) setState(() => _localIndex = index);
   }
 
   @override
   Widget build(BuildContext context) {
-    final settings = ref.watch(appSettingsProvider);
-    final lang = settings.language;
-
-    final List<Widget> screens = [
-      const HomeScreen(),
-      const AddMedicineScreen(),
-      const UploadPrescriptionScreen(),
-      const AdherenceDashboardScreen(),
-      const CaregiverDashboardScreen(),
-    ];
-
+    final lang = ref.watch(appSettingsProvider).language;
+    final shell = widget.navigationShell;
     return Scaffold(
-      body: IndexedStack(
-        index: _currentIndex,
-        children: screens,
-      ),
+      body: shell ??
+          IndexedStack(
+            index: _localIndex,
+            children: const [
+              HomeScreen(),
+              AddMedicineScreen(),
+              UploadPrescriptionScreen(),
+              AdherenceDashboardScreen(),
+              CaregiverDashboardScreen(),
+            ],
+          ),
       bottomNavigationBar: _buildCustomNavBar(context, lang),
     );
   }

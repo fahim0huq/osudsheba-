@@ -177,7 +177,7 @@ class SettingsScreen extends ConsumerWidget {
                 context,
                 icon: Icons.people_rounded,
                 title: lang == 'bn' ? 'তত্ত্বাবধায়ক/পারিবারিক এক্সেস' : 'Family/Caregiver Access',
-                onTap: () => context.push('/caregiver'),
+                onTap: () => context.go('/caregiver'),
               ),
             ),
             FadeSlideIn(

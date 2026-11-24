@@ -58,6 +58,7 @@ dependencies:
   appspro_sdk: ^0.1.0
   cloud_firestore: ^6.10.2
   firebase_messaging: ^16.7.1
+  path_provider: ^2.1.6
 dev_dependencies:
   flutter_test:
     sdk: flutter

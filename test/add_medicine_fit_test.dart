@@ -42,7 +42,7 @@ final _editTarget = Medicine(
 
 /// How far a medicine form scrolls: Add Medicine opened from the Add tab, or Edit Medicine.
 Future<double> _scrollExtent(WidgetTester tester, _Phone phone, String lang, double textScale,
-    {bool edit = false, bool customThreeTimes = false, bool family = false}) async {
+    {bool edit = false, bool custom = false, bool family = false}) async {
   tester.view.devicePixelRatio = phone.dpr;
   tester.view.physicalSize = Size(phone.width * phone.dpr, phone.height * phone.dpr);
   tester.view.padding = FakeViewPadding(top: phone.top * phone.dpr, bottom: phone.bottom * phone.dpr);
@@ -85,15 +85,19 @@ Future<double> _scrollExtent(WidgetTester tester, _Phone phone, String lang, dou
   for (var i = 0; i < 6; i++) {
     await tester.pump(const Duration(milliseconds: 300));
   }
-  if (customThreeTimes) {
-    // How often -> Custom, then "Times a day" + (2 -> 3), as a user would.
+  if (custom) {
+    // "3 times", then "Custom" (it opens the time picker: cancel it), as a user would.
     final add = find.byType(AddMedicineScreen);
-    await tester.tap(find.descendant(of: add, matching: find.text('Twice a day')));
+    await tester.tap(find.descendant(of: add, matching: find.text('3 times')));
     await tester.pump(const Duration(milliseconds: 500));
-    await tester.tap(find.text('Custom').last);
-    await tester.pump(const Duration(milliseconds: 500));
-    await tester.tap(find.descendant(of: add, matching: find.byTooltip('More')));
-    await tester.pump(const Duration(milliseconds: 500));
+    await tester.tap(find.descendant(of: add, matching: find.text('Custom')));
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(milliseconds: 300));
+    }
+    await tester.tap(find.text('Cancel'));
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(milliseconds: 300));
+    }
     expect(find.descendant(of: add, matching: find.textContaining(RegExp(r'^\d{1,2}:\d{2} [AP]M$'))), findsNWidgets(3));
   }
   final scrollable = tester.state<ScrollableState>(
@@ -136,8 +140,8 @@ void main() {
     });
   }
 
-  testWidgets('Add Medicine fits on ${_phones.first.name} with Custom, 3 times a day', (tester) async {
-    final extent = await _scrollExtent(tester, _phones.first, 'en', 1.1, customThreeTimes: true);
+  testWidgets('Add Medicine fits on ${_phones.first.name} with 3 times, then Custom', (tester) async {
+    final extent = await _scrollExtent(tester, _phones.first, 'en', 1.1, custom: true);
     expect(extent, 0.0, reason: 'form needs ${extent.toStringAsFixed(0)}px of scrolling');
   });
 

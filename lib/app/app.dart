@@ -87,6 +87,13 @@ class _OsudShebaAppState extends ConsumerState<OsudShebaApp> with WidgetsBinding
     try {
       final data = jsonDecode(payload) as Map<String, dynamic>;
       final String medicineId = data['medicineId'] as String? ?? '';
+      if (data['type'] == 'refill') {
+        // Low-stock reminder: open the buying guide (over Home, so Back lands there), not
+        // the dose alarm.
+        appRouter.go('/home');
+        appRouter.push('/refill?medicineId=${Uri.encodeComponent(medicineId)}');
+        return;
+      }
       final String scheduledTime = data['scheduledTime'] as String? ?? '';
       final bool isTest = data['isTest'] == true;
       appRouter.push(
@@ -154,6 +161,12 @@ class _OsudShebaAppState extends ConsumerState<OsudShebaApp> with WidgetsBinding
     ref.listen<List<DoseLog>>(doseLogsProvider, (previous, next) {
       if (ref.read(userUidProvider) == null) return;
       NotificationService.instance.rescheduleAll(ref.read(medicinesProvider), logs: next);
+    });
+
+    // ... and when the reminder style changes (full-screen alarm or notification only).
+    ref.listen<bool>(appSettingsProvider.select((s) => s.fullScreenAlarms), (previous, next) {
+      if (ref.read(userUidProvider) == null) return;
+      NotificationService.instance.rescheduleAll(ref.read(medicinesProvider), logs: ref.read(doseLogsProvider));
     });
 
     final textScale = ref.watch(appSettingsProvider.select((s) => s.textScale));

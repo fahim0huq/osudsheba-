@@ -7,6 +7,8 @@ import '../../../core/models/mock_models.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/services/phone_actions.dart';
+import '../../../core/utils/home_schedule.dart';
+import '../../../core/utils/time_label.dart';
 import '../../../core/utils/time_utils.dart';
 import '../../../shared/widgets/confirm_dialog.dart';
 import '../../../shared/widgets/app_primary_button.dart';
@@ -71,6 +73,8 @@ class DoseActionScreen extends ConsumerWidget {
     final title = lang == 'bn' ? 'ওষুধ সেবন' : 'Dose Action';
 
     final slot = normalizeTimeString(scheduledTime) ?? scheduledTime;
+    // A dose cannot be recorded (taken, skipped or snoozed) before its time.
+    final early = !doseTimeHasCome(slot, DateTime.now());
 
     void onTakenAll() {
       NotificationService.instance.dismissTimeSlot(slot);
@@ -318,6 +322,14 @@ class DoseActionScreen extends ConsumerWidget {
                 delay: const Duration(milliseconds: 250),
                 child: Column(
                   children: [
+                    if (early)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: Text(notYetText(slot, lang),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                                fontSize: 17, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+                      ),
                     // TAKEN
                     SizedBox(
                       height: 64.0,
@@ -325,7 +337,7 @@ class DoseActionScreen extends ConsumerWidget {
                         text: lang == 'bn' ? 'খেয়েছি' : 'I took it',
                         icon: Icons.check_circle_rounded,
                         backgroundColor: AppColors.success,
-                        onPressed: onTakenAll,
+                        onPressed: early ? null : onTakenAll,
                       ),
                     ),
                     const SizedBox(height: 10.0),
@@ -337,7 +349,7 @@ class DoseActionScreen extends ConsumerWidget {
                         text: lang == 'bn' ? '১০ মিনিট পর মনে করাও' : 'Remind me in 10 min',
                         icon: Icons.snooze_rounded,
                         backgroundColor: AppColors.warning,
-                        onPressed: onSnoozeAll,
+                        onPressed: early ? null : onSnoozeAll,
                       ),
                     ),
                     const SizedBox(height: 10.0),
@@ -362,7 +374,7 @@ class DoseActionScreen extends ConsumerWidget {
                                 side: BorderSide(color: AppColors.error.withValues(alpha: 0.6)),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.0)),
                               ),
-                              onPressed: onSkipAll,
+                              onPressed: early ? null : onSkipAll,
                             ),
                           ),
                         ),

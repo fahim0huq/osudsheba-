@@ -104,3 +104,52 @@ List<DoseSlot> findOverdueToday({
   }
   return (taken: taken, total: total);
 }
+
+/// What happened to one medicine's dose at one time today.
+enum DoseState { taken, skipped, missed, pending }
+
+/// One medicine at one time today, for the "Today" list.
+class TodayDose {
+  final Medicine medicine;
+  final String time; // canonical "hh:mm AM"
+  final int minute; // minute of the day
+  final DoseState state;
+
+  const TodayDose({required this.medicine, required this.time, required this.minute, required this.state});
+}
+
+/// Every dose scheduled today, earliest first, with what was recorded for it.
+/// Taken includes "late"; a dose with no record yet is [DoseState.pending].
+List<TodayDose> todayDoses({
+  required List<Medicine> medicines,
+  required List<DoseLog> logs,
+  required DateTime now,
+}) {
+  final out = <TodayDose>[];
+  for (final med in medicines) {
+    if (!med.isScheduledOn(now)) continue;
+    final seen = <int>{};
+    for (final t in med.times) {
+      final m = minutesOfDay(t);
+      if (m < 0 || !seen.add(m)) continue;
+      bool has(Set<String> s) => hasDoseLog(logs, med.id, t, now, statuses: s);
+      final state = has(const {'taken', 'late'})
+          ? DoseState.taken
+          : has(const {'skipped'})
+              ? DoseState.skipped
+              : has(const {'missed'})
+                  ? DoseState.missed
+                  : DoseState.pending;
+      out.add(TodayDose(medicine: med, time: formatTimeOfDay(m ~/ 60, m % 60), minute: m, state: state));
+    }
+  }
+  out.sort((a, b) => a.minute != b.minute ? a.minute - b.minute : a.medicine.name.compareTo(b.medicine.name));
+  return out;
+}
+
+/// True once [time] ("hh:mm AM") has come today. A dose cannot be recorded as taken
+/// or skipped before its time.
+bool doseTimeHasCome(String time, DateTime now) {
+  final m = minutesOfDay(time);
+  return m >= 0 && m <= now.hour * 60 + now.minute;
+}

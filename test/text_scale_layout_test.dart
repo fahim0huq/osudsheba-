@@ -19,38 +19,66 @@ const _phoneSizes = <Size>[Size(360, 640), Size(320, 568)];
 
 List<Medicine> _medicines() {
   final yesterday = DateTime.now().subtract(const Duration(days: 1));
-  Medicine med(String id, String name, String strength, MedicineForm form, List<String> times,
-          String meal, String instruction) =>
-      Medicine(
-        id: id,
-        name: name,
-        strength: strength,
-        form: form,
-        dose: '১টি ট্যাবলেট',
-        times: times,
-        mealRelation: meal,
-        instruction: instruction,
-        startDate: yesterday,
-        createdAt: yesterday,
-      );
+  Medicine med(
+    String id,
+    String name,
+    String strength,
+    MedicineForm form,
+    List<String> times,
+    String meal,
+    String instruction,
+  ) => Medicine(
+    id: id,
+    name: name,
+    strength: strength,
+    form: form,
+    dose: '১টি ট্যাবলেট',
+    times: times,
+    mealRelation: meal,
+    instruction: instruction,
+    startDate: yesterday,
+    createdAt: yesterday,
+  );
   // Long Bangla names and instructions on purpose: worst case for wrapping.
   return [
-    med('m1', 'নাপা এক্সটেন্ড প্যারাসিটামল', '৬৬৫ মিলিগ্রাম', MedicineForm.tablet,
-        ['06:00 AM', '08:00 AM', '02:00 PM', '09:00 PM'], 'After Meal',
-        'খাবারের পরে এক গ্লাস হালকা গরম পানির সাথে খাবেন'),
-    med('m2', 'সেকলো (ওমিপ্রাজল) ক্যাপসুল', '২০ মিলিগ্রাম', MedicineForm.capsule,
-        ['08:00 AM', '08:00 PM', '11:30 PM'], 'Before Meal', 'খাবারের ৩০ মিনিট আগে'),
-    med('m3', 'অ্যামলোডিপিন ও লোসার্টান পটাশিয়াম', '৫/৫০ মিলিগ্রাম', MedicineForm.tablet,
-        ['08:00 AM', '11:30 PM'], 'With Meal', ''),
+    med(
+      'm1',
+      'নাপা এক্সটেন্ড প্যারাসিটামল',
+      '৬৬৫ মিলিগ্রাম',
+      MedicineForm.tablet,
+      ['06:00 AM', '08:00 AM', '02:00 PM', '09:00 PM'],
+      'After Meal',
+      'খাবারের পরে এক গ্লাস হালকা গরম পানির সাথে খাবেন',
+    ),
+    med(
+      'm2',
+      'সেকলো (ওমিপ্রাজল) ক্যাপসুল',
+      '২০ মিলিগ্রাম',
+      MedicineForm.capsule,
+      ['08:00 AM', '08:00 PM', '11:30 PM'],
+      'Before Meal',
+      'খাবারের ৩০ মিনিট আগে',
+    ),
+    med(
+      'm3',
+      'অ্যামলোডিপিন ও লোসার্টান পটাশিয়াম',
+      '৫/৫০ মিলিগ্রাম',
+      MedicineForm.tablet,
+      ['08:00 AM', '11:30 PM'],
+      'With Meal',
+      '',
+    ),
   ];
 }
 
 Widget _harness(Widget screen) {
   final storage = LocalStorageService();
-  final router = GoRouter(routes: [
-    GoRoute(path: '/', builder: (_, _) => screen),
-    GoRoute(path: '/:rest(.*)', builder: (_, _) => const Scaffold()),
-  ]);
+  final router = GoRouter(
+    routes: [
+      GoRoute(path: '/', builder: (_, _) => screen),
+      GoRoute(path: '/:rest(.*)', builder: (_, _) => const Scaffold()),
+    ],
+  );
   return ProviderScope(
     overrides: [
       userUidProvider.overrideWithValue(null),
@@ -74,8 +102,12 @@ Widget _harness(Widget screen) {
   );
 }
 
-Future<void> _expectNoLayoutErrors(WidgetTester tester, String name, Widget screen,
-    {void Function(Size screenSize)? alsoCheck}) async {
+Future<void> _expectNoLayoutErrors(
+  WidgetTester tester,
+  String name,
+  Widget screen, {
+  void Function(Size screenSize)? alsoCheck,
+}) async {
   for (final size in _phoneSizes) {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1.0;
@@ -94,8 +126,13 @@ Future<void> _expectNoLayoutErrors(WidgetTester tester, String name, Widget scre
       FlutterError.onError = previous;
       await tester.pumpWidget(const SizedBox());
     }
-    expect(errors, isEmpty, reason: '$name at ${size.width.toInt()}x${size.height.toInt()}:\n'
-        '${errors.join('\n')}');
+    expect(
+      errors,
+      isEmpty,
+      reason:
+          '$name at ${size.width.toInt()}x${size.height.toInt()}:\n'
+          '${errors.join('\n')}',
+    );
   }
 }
 
@@ -146,12 +183,17 @@ void main() {
       const ReminderAlertScreen(medicineId: 'm1', scheduledTime: '08:00 AM'),
       // The action buttons must be fully on screen without scrolling.
       alsoCheck: (screen) {
-        for (final icon in [Icons.check_circle_rounded, Icons.snooze_rounded]) {
-          final rect = tester.getRect(find.byIcon(icon).last);
-          expect(rect.bottom, lessThanOrEqualTo(screen.height), reason: '$icon is below the screen');
-        }
+        // Taken, "In 10 min", "In 15 min" and Close.
         final takenButton = tester.getRect(find.byType(ElevatedButton));
         expect(takenButton.bottom, lessThanOrEqualTo(screen.height));
+        for (final b in tester.widgetList<OutlinedButton>(find.byType(OutlinedButton))) {
+          expect(
+            tester.getRect(find.byWidget(b)).bottom,
+            lessThanOrEqualTo(screen.height),
+            reason: 'a button is below the screen',
+          );
+        }
+        expect(find.byType(OutlinedButton), findsNWidgets(3));
       },
     );
   });

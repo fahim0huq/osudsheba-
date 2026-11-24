@@ -50,11 +50,14 @@ Widget pairedFields(bool stacked, Widget a, Widget b) {
 /// The Dose field. For an injection it asks for the amount in ml (number keypad, "ml"
 /// shown after the number), like the marks on a syringe. See [doseFieldText] / [doseForSave].
 class DoseField extends StatelessWidget {
-  const DoseField({super.key, required this.controller, required this.form, required this.bn});
+  const DoseField({super.key, required this.controller, required this.form, required this.bn, this.filled = false});
 
   final TextEditingController controller;
   final MedicineForm form;
   final bool bn;
+
+  /// White fill, for fields on a coloured card.
+  final bool filled;
 
   @override
   Widget build(BuildContext context) {
@@ -67,7 +70,7 @@ class DoseField extends StatelessWidget {
         injection ? (bn ? 'কত ml' : 'Amount') : (bn ? 'পরিমাণ' : 'Dose'),
         hint: injection ? 'e.g. 2' : form.defaultDose,
         suffix: injection ? 'ml' : null,
-      ),
+      ).copyWith(filled: filled ? true : null, fillColor: filled ? Colors.white : null),
       validator: (value) {
         if (requiredField(value) != null) return 'Required';
         if (injection && double.tryParse(value!.trim().replaceAll(',', '.')) == null) {
@@ -211,60 +214,6 @@ List<String> evenlySpacedTimes(int count) {
   final times = {for (final m in minutes) formatTimeOfDay(m ~/ 60, m % 60)}.toList();
   times.sort((a, b) => minutesOfDay(a).compareTo(minutesOfDay(b)));
   return times;
-}
-
-/// "Times a day  [-] 4 [+]" for a custom schedule.
-class TimesPerDayStepper extends StatelessWidget {
-  const TimesPerDayStepper({super.key, required this.count, required this.onChanged, required this.bn});
-
-  static const int max = 12;
-  final int count;
-  final ValueChanged<int> onChanged;
-  final bool bn;
-
-  @override
-  Widget build(BuildContext context) {
-    final digits = bn ? count.toString().split('').map((d) => '০১২৩৪৫৬৭৮৯'[int.parse(d)]).join() : '$count';
-    return Container(
-      padding: const EdgeInsets.only(left: 14.0),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16.0),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.repeat_rounded, color: AppColors.primary, size: 20),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(bn ? 'দিনে কতবার' : 'Times a day',
-                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-          ),
-          IconButton(
-            visualDensity: VisualDensity.compact,
-            tooltip: bn ? 'কমান' : 'Fewer',
-            icon: const Icon(Icons.remove_circle_outline_rounded),
-            color: AppColors.primary,
-            onPressed: count > 1 ? () => onChanged(count - 1) : null,
-          ),
-          SizedBox(
-            width: 28,
-            child: Text(digits,
-                textAlign: TextAlign.center,
-                semanticsLabel: '$count',
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-          ),
-          IconButton(
-            visualDensity: VisualDensity.compact,
-            tooltip: bn ? 'বাড়ান' : 'More',
-            icon: const Icon(Icons.add_circle_outline_rounded),
-            color: AppColors.primary,
-            onPressed: count < max ? () => onChanged(count + 1) : null,
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 /// Reminder times as compact chips (tap the time to change it, x to remove it), with a small

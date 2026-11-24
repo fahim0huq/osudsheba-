@@ -5,6 +5,8 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../shared/widgets/confirm_dialog.dart';
+import 'widgets/refill_days_card.dart';
+import 'widgets/reminder_style_card.dart';
 
 /// Reminder settings.
 ///
@@ -39,19 +41,18 @@ class _ReminderSettingsScreenState extends ConsumerState<ReminderSettingsScreen>
     ref.read(appSettingsProvider.notifier).updateToggles(appNotifications: value);
     // Apply immediately: previously the switch was saved but alarms kept (or never
     // started) ringing until the medicine list happened to change.
-    await NotificationService.instance.rescheduleAll(
-      ref.read(medicinesProvider),
-      logs: ref.read(doseLogsProvider),
-    );
+    await NotificationService.instance.rescheduleAll(ref.read(medicinesProvider), logs: ref.read(doseLogsProvider));
     if (value) {
       await NotificationService.instance.requestPermissions();
     }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(value
-            ? (lang == 'bn' ? 'ওষুধের অ্যালার্ম চালু করা হয়েছে' : 'Medicine alarms are on')
-            : (lang == 'bn' ? 'ওষুধের অ্যালার্ম বন্ধ করা হয়েছে' : 'Medicine alarms are off')),
+        content: Text(
+          value
+              ? (lang == 'bn' ? 'ওষুধের অ্যালার্ম চালু করা হয়েছে' : 'Medicine alarms are on')
+              : (lang == 'bn' ? 'ওষুধের অ্যালার্ম বন্ধ করা হয়েছে' : 'Medicine alarms are off'),
+        ),
         backgroundColor: value ? AppColors.success : AppColors.error,
       ),
     );
@@ -63,7 +64,13 @@ class _ReminderSettingsScreenState extends ConsumerState<ReminderSettingsScreen>
     try {
       if (kIsWeb) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(lang == 'bn' ? 'ওয়েবে অ্যালার্ম কাজ করে না। ফোনের অ্যাপ ব্যবহার করুন।' : 'Alarms do not work in the web version. Please use the phone app.')),
+          SnackBar(
+            content: Text(
+              lang == 'bn'
+                  ? 'ওয়েবে অ্যালার্ম কাজ করে না। ফোনের অ্যাপ ব্যবহার করুন।'
+                  : 'Alarms do not work in the web version. Please use the phone app.',
+            ),
+          ),
         );
         return;
       }
@@ -76,9 +83,11 @@ class _ReminderSettingsScreenState extends ConsumerState<ReminderSettingsScreen>
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           duration: const Duration(seconds: 6),
-          content: Text(lang == 'bn'
-              ? 'পরীক্ষামূলক অ্যালার্ম $hh:$mm $ampm-এ বাজবে। ফোন লক করে অপেক্ষা করুন।'
-              : 'A test alarm will ring at $hh:$mm $ampm. Lock the phone and wait.'),
+          content: Text(
+            lang == 'bn'
+                ? 'পরীক্ষামূলক অ্যালার্ম $hh:$mm $ampm-এ বাজবে। ফোন লক করে অপেক্ষা করুন।'
+                : 'A test alarm will ring at $hh:$mm $ampm. Lock the phone and wait.',
+          ),
           backgroundColor: AppColors.success,
         ),
       );
@@ -123,7 +132,9 @@ class _ReminderSettingsScreenState extends ConsumerState<ReminderSettingsScreen>
                   padding: const EdgeInsets.only(top: 4.0),
                   child: Text(
                     remindersOn
-                        ? (lang == 'bn' ? 'চালু — প্রতিটি ডোজের সময় ফোনে অ্যালার্ম বাজবে' : 'On — your phone rings at each dose time')
+                        ? (lang == 'bn'
+                              ? 'চালু — প্রতিটি ডোজের সময় ফোনে অ্যালার্ম বাজবে'
+                              : 'On — your phone rings at each dose time')
                         : (lang == 'bn' ? 'বন্ধ — কোনো অ্যালার্ম বাজবে না' : 'Off — no alarms will ring'),
                     style: TextStyle(
                       fontSize: 16.0,
@@ -137,6 +148,12 @@ class _ReminderSettingsScreenState extends ConsumerState<ReminderSettingsScreen>
               ),
             ),
             const SizedBox(height: 12.0),
+            if (remindersOn) ...[
+              const ReminderStyleCard(),
+              const SizedBox(height: 12.0),
+              const RefillDaysCard(),
+              const SizedBox(height: 12.0),
+            ],
             Container(
               decoration: BoxDecoration(
                 color: Colors.white,

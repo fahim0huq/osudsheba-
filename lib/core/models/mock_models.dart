@@ -115,6 +115,15 @@ class Medicine {
   final DateTime? endDate;
   final String status; // "active" | "completed" | "paused"
   final DateTime? createdAt;
+  /// A photo of the medicine (pack or pill) saved on this phone, shown on the alarm screen.
+  /// Only the local file path is stored; the photo itself is not backed up.
+  final String? photoPath;
+
+  /// Stock: how many units (tablets, capsules, or ml) the person had at [stockSetAt].
+  /// What is left now is this minus the doses marked taken since then (see stock.dart),
+  /// so undoing a dose puts it back. Null = stock not tracked.
+  final double? stockCount;
+  final DateTime? stockSetAt;
 
   Medicine({
     required this.id,
@@ -129,6 +138,9 @@ class Medicine {
     this.endDate,
     this.status = 'active',
     this.createdAt,
+    this.photoPath,
+    this.stockCount,
+    this.stockSetAt,
   });
 
   Medicine copyWith({
@@ -144,7 +156,12 @@ class Medicine {
     DateTime? endDate,
     String? status,
     DateTime? createdAt,
+    String? photoPath,
+    double? stockCount,
+    DateTime? stockSetAt,
     bool clearEndDate = false,
+    bool clearPhoto = false,
+    bool clearStock = false,
   }) {
     return Medicine(
       id: id ?? this.id,
@@ -159,6 +176,9 @@ class Medicine {
       endDate: clearEndDate ? null : (endDate ?? this.endDate),
       status: status ?? this.status,
       createdAt: createdAt ?? this.createdAt,
+      photoPath: clearPhoto ? null : (photoPath ?? this.photoPath),
+      stockCount: clearStock ? null : (stockCount ?? this.stockCount),
+      stockSetAt: clearStock ? null : (stockSetAt ?? this.stockSetAt),
     );
   }
 
@@ -176,6 +196,9 @@ class Medicine {
       'endDate': endDate?.toIso8601String(),
       'status': status,
       'createdAt': createdAt?.toIso8601String(),
+      if (photoPath != null) 'photoPath': photoPath,
+      if (stockCount != null) 'stockCount': stockCount,
+      if (stockSetAt != null) 'stockSetAt': stockSetAt!.toIso8601String(),
     };
   }
 
@@ -196,6 +219,9 @@ class Medicine {
       endDate: json['endDate'] != null ? DateTime.tryParse(json['endDate'] as String) : null,
       status: json['status'] as String? ?? 'active',
       createdAt: json['createdAt'] != null ? DateTime.tryParse(json['createdAt'] as String) : null,
+      photoPath: json['photoPath'] as String?,
+      stockCount: (json['stockCount'] as num?)?.toDouble(),
+      stockSetAt: json['stockSetAt'] != null ? DateTime.tryParse(json['stockSetAt'] as String) : null,
     );
   }
 }
@@ -343,6 +369,12 @@ class AppSettings {
   /// Back up medicines and dose history to the user's account (Firestore). Off until the
   /// user turns it on: it sends health data to the cloud.
   final bool cloudBackupEnabled;
+  /// Reminder style: true = full-screen alarm (sound, medicine photo, opens over the lock
+  /// screen); false = only a notification in the notification bar.
+  final bool fullScreenAlarms;
+
+  /// Remind to buy a medicine this many days before its stock runs out.
+  final int refillAlertDays;
 
   // Backwards compatibility getters:
   String get language => languageCode;
@@ -357,6 +389,8 @@ class AppSettings {
     this.onboardingCompleted = false,
     this.textScale = 1.1,
     this.cloudBackupEnabled = false,
+    this.fullScreenAlarms = true,
+    this.refillAlertDays = 5,
   });
 
   AppSettings copyWith({
@@ -370,6 +404,8 @@ class AppSettings {
     bool? onboardingCompleted,
     double? textScale,
     bool? cloudBackupEnabled,
+    bool? fullScreenAlarms,
+    int? refillAlertDays,
   }) {
     return AppSettings(
       languageCode: languageCode ?? language ?? this.languageCode,
@@ -379,6 +415,8 @@ class AppSettings {
       onboardingCompleted: onboardingCompleted ?? this.onboardingCompleted,
       textScale: textScale ?? this.textScale,
       cloudBackupEnabled: cloudBackupEnabled ?? this.cloudBackupEnabled,
+      fullScreenAlarms: fullScreenAlarms ?? this.fullScreenAlarms,
+      refillAlertDays: refillAlertDays ?? this.refillAlertDays,
     );
   }
 
@@ -391,6 +429,8 @@ class AppSettings {
       'onboardingCompleted': onboardingCompleted,
       'textScale': textScale,
       'cloudBackupEnabled': cloudBackupEnabled,
+      'fullScreenAlarms': fullScreenAlarms,
+      'refillAlertDays': refillAlertDays,
     };
   }
 
@@ -403,6 +443,8 @@ class AppSettings {
       onboardingCompleted: json['onboardingCompleted'] as bool? ?? false,
       textScale: ((json['textScale'] as num?)?.toDouble() ?? 1.1).clamp(1.0, 1.5).toDouble(),
       cloudBackupEnabled: json['cloudBackupEnabled'] as bool? ?? false,
+      fullScreenAlarms: json['fullScreenAlarms'] as bool? ?? true,
+      refillAlertDays: ((json['refillAlertDays'] as num?)?.toInt() ?? 5).clamp(1, 14),
     );
   }
 }

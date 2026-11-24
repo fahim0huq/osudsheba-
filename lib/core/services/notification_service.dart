@@ -2,12 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as dev;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import '../models/mock_models.dart';
 import '../utils/schedule_utils.dart';
+import '../utils/stock.dart';
 import '../utils/time_utils.dart';
 import 'local_storage_service.dart';
 
@@ -30,6 +32,9 @@ class NotificationService {
 
   /// Channel for reminders sent by family (must match the server's push channelId).
   static const String familyChannelId = 'family_reminders';
+
+  /// Channel for "time to buy more" reminders: an ordinary notification, never an alarm.
+  static const String refillChannelId = 'refill_reminders';
 
   /// Initialize timezones, platform initialization settings, and channels
   Future<void> init() async {
@@ -98,6 +103,12 @@ class NotificationService {
         description: 'Reminders sent by family members who help you with your medicines.',
         importance: Importance.high,
       ));
+      await androidPlugin.createNotificationChannel(const AndroidNotificationChannel(
+        refillChannelId,
+        'Medicine stock',
+        description: 'Reminders to buy a medicine before it runs out.',
+        importance: Importance.high,
+      ));
     }
   }
 
@@ -157,10 +168,39 @@ class NotificationService {
     return notificationsGranted;
   }
 
+  static const _alarmChannel = MethodChannel('com.medisathi.bd.osudsheba/alarm');
+
+  /// Whether this phone will open the alarm full screen (Android 14+ asks the user).
+  Future<bool> canUseFullScreen() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return false;
+    try {
+      return await _alarmChannel.invokeMethod<bool>('canUseFullScreen') ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /// Android 14+ lets the user switch off full-screen alarms per app. Asks for it (opens the
+  /// system page when needed) and returns whether full-screen alarms can be shown.
+  Future<bool> requestFullScreenPermission() async {
+    if (kIsWeb) return false;
+    final androidPlugin = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    if (androidPlugin == null) return true;
+    try {
+      return await androidPlugin.requestFullScreenIntentPermission() ?? false;
+    } catch (e) {
+      dev.log('NotificationService: full-screen permission request failed: $e');
+      return false;
+    }
+  }
+
   /// Get standard alarm notification details for Android and iOS
   NotificationDetails _buildAlarmNotificationDetails({
     required String ticker,
   }) {
+    // Full-screen alarm (the user's choice in Reminder settings): Android opens the alarm
+    // screen over the lock screen and wakes the phone. Otherwise a notification only.
+    final fullScreen = (LocalStorageService().getSettings() ?? AppSettings()).fullScreenAlarms;
     final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
       channelId,
       channelName,
@@ -170,8 +210,7 @@ class NotificationService {
       playSound: true,
       enableVibration: true,
       category: AndroidNotificationCategory.alarm,
-      // No full-screen intent: USE_FULL_SCREEN_INTENT is not declared (Play policy).
-      fullScreenIntent: false,
+      fullScreenIntent: fullScreen,
       visibility: NotificationVisibility.public,
       audioAttributesUsage: AudioAttributesUsage.alarm,
       ongoing: true,
@@ -367,6 +406,47 @@ class NotificationService {
       }
     }
     dev.log('NotificationService: Rescheduled $scheduled alarms across ${slots.length} time slots');
+    await _scheduleRefillReminders(medicines, logs, settings);
+  }
+
+  /// "Time to buy" reminders for medicines whose counted stock is running low.
+  Future<void> _scheduleRefillReminders(List<Medicine> medicines, List<DoseLog> logs, AppSettings settings) async {
+    final now = DateTime.now();
+    var count = 0;
+    for (final m in medicines) {
+      final s = stockStatus(m, logs, now, alertDays: settings.refillAlertDays);
+      if (s == null) continue;
+      for (final at in refillReminderTimes(s, now, alertDays: settings.refillAlertDays)) {
+        final text = refillNoticeText(m, s, at, settings.language);
+        final key = '${at.year}${at.month.toString().padLeft(2, '0')}${at.day.toString().padLeft(2, '0')}';
+        try {
+          await _plugin.zonedSchedule(
+            _stableId('refill|${m.id}|$key'),
+            text.title,
+            text.body,
+            tz.TZDateTime(tz.local, at.year, at.month, at.day, at.hour, at.minute),
+            NotificationDetails(
+              android: AndroidNotificationDetails(
+                refillChannelId,
+                'Medicine stock',
+                channelDescription: 'Reminders to buy a medicine before it runs out.',
+                importance: Importance.high,
+                priority: Priority.high,
+                styleInformation: BigTextStyleInformation(text.body),
+              ),
+              iOS: const DarwinNotificationDetails(),
+            ),
+            androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+            uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+            payload: jsonEncode({'type': 'refill', 'medicineId': m.id}),
+          );
+          count++;
+        } catch (e) {
+          dev.log('NotificationService: could not schedule refill reminder for ${m.name}: $e');
+        }
+      }
+    }
+    if (count > 0) dev.log('NotificationService: Scheduled $count refill reminders');
   }
 
   Future<void> _scheduleSlot({
@@ -611,7 +691,8 @@ class NotificationService {
   void _checkForegroundDueMedicines() {
     if (_monitoredMedicines.isEmpty) return;
     final settings = LocalStorageService().getSettings() ?? AppSettings();
-    if (!settings.appNotificationsEnabled) return;
+    // "Notification only" was chosen: no alarm screen pops up, the notification is enough.
+    if (!settings.appNotificationsEnabled || !settings.fullScreenAlarms) return;
 
     final now = DateTime.now();
     final currentMinuteKey = '${now.year}-${now.month}-${now.day} ${now.hour}:${now.minute}';

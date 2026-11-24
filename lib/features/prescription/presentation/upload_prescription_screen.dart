@@ -188,7 +188,7 @@ class _UploadPrescriptionScreenState extends ConsumerState<UploadPrescriptionScr
               TextButton.icon(
                 icon: const Icon(Icons.edit_note_rounded),
                 label: Text(bn ? 'ছবি ছাড়া নিজে লিখুন' : 'Enter without a photo'),
-                onPressed: () => context.push('/add-medicine'),
+                onPressed: () => context.go('/add-medicine'),
               ),
             ],
           ),

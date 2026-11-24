@@ -20,7 +20,12 @@ import '../features/auth/presentation/forgot_password_screen.dart';
 import '../features/profile/presentation/patient_profile_setup_screen.dart';
 import '../features/profile/presentation/caregiver_profile_setup_screen.dart';
 import '../features/home/presentation/main_navigation_screen.dart';
-import '../features/medicines/presentation/medicine_list_screen.dart';
+import '../features/home/presentation/home_screen.dart';
+import '../features/medicines/presentation/add_medicine_screen.dart';
+import '../features/prescription/presentation/upload_prescription_screen.dart';
+import '../features/adherence/presentation/adherence_dashboard_screen.dart';
+import '../features/caregiver/presentation/caregiver_dashboard_screen.dart';
+import '../features/medicines/presentation/todays_medicines_screen.dart';
 
 import '../features/medicines/presentation/medicine_detail_screen.dart';
 import '../features/medicines/presentation/edit_medicine_screen.dart';
@@ -44,6 +49,7 @@ import '../features/settings/presentation/settings_screen.dart';
 import '../features/settings/presentation/privacy_screen.dart';
 import '../features/settings/presentation/language_settings_screen.dart';
 import '../features/onboarding/presentation/app_startup_gate.dart';
+import '../features/medicines/presentation/buy_guide_screen.dart';
 
 final GoRouter appRouter = GoRouter(
   initialLocation: '/',
@@ -137,17 +143,30 @@ final GoRouter appRouter = GoRouter(
       path: '/caregiver-profile-setup',
       builder: (context, state) => const CaregiverProfileSetupScreen(),
     ),
+    // The five bottom tabs. Each tab is built once and kept alive, so switching tabs is an
+    // instant swap (before, every tap built a whole new page with all five screens).
+    StatefulShellRoute.indexedStack(
+      builder: (context, state, navigationShell) => MainNavigationScreen(navigationShell: navigationShell),
+      branches: [
+        StatefulShellBranch(routes: [GoRoute(path: '/home', builder: (context, state) => const HomeScreen())]),
+        StatefulShellBranch(routes: [GoRoute(path: '/add-medicine', builder: (context, state) => const AddMedicineScreen())]),
+        StatefulShellBranch(routes: [GoRoute(path: '/upload-prescription', builder: (context, state) => const UploadPrescriptionScreen())]),
+        StatefulShellBranch(routes: [GoRoute(path: '/adherence', builder: (context, state) => const AdherenceDashboardScreen())]),
+        StatefulShellBranch(routes: [GoRoute(path: '/caregiver', builder: (context, state) => const CaregiverDashboardScreen())]),
+      ],
+    ),
+    // Add Medicine as its own page (with a back arrow), for screens outside the tabs.
     GoRoute(
-      path: '/home',
-      builder: (context, state) => const MainNavigationScreen(initialTab: 0),
+      path: '/new-medicine',
+      builder: (context, state) => const AddMedicineScreen(),
     ),
     GoRoute(
       path: '/medicines',
-      builder: (context, state) => const MedicineListScreen(),
+      builder: (context, state) => TodaysMedicinesScreen(initialTab: state.uri.queryParameters['tab'] == 'all' ? 1 : 0),
     ),
     GoRoute(
-      path: '/add-medicine',
-      builder: (context, state) => const MainNavigationScreen(initialTab: 1),
+      path: '/refill',
+      builder: (context, state) => BuyGuideScreen(medicineId: state.uri.queryParameters['medicineId'] ?? ''),
     ),
     GoRoute(
       path: '/medicine-detail',
@@ -172,10 +191,6 @@ final GoRouter appRouter = GoRouter(
         final time = args['scheduledTime'] as String? ?? '';
         return DoseActionScreen(medicine: med, scheduledTime: time);
       },
-    ),
-    GoRoute(
-      path: '/upload-prescription',
-      builder: (context, state) => const MainNavigationScreen(initialTab: 2),
     ),
     GoRoute(
       path: '/ai-prescription-review',
@@ -206,20 +221,12 @@ final GoRouter appRouter = GoRouter(
       builder: (context, state) => const ReminderSettingsScreen(),
     ),
     GoRoute(
-      path: '/adherence',
-      builder: (context, state) => const MainNavigationScreen(initialTab: 3),
-    ),
-    GoRoute(
       path: '/adherence-history',
       builder: (context, state) => const AdherenceHistoryScreen(),
     ),
     GoRoute(
       path: '/adherence-insights',
       builder: (context, state) => const AdherenceInsightsScreen(),
-    ),
-    GoRoute(
-      path: '/caregiver',
-      builder: (context, state) => const MainNavigationScreen(initialTab: 4),
     ),
     GoRoute(
       path: '/caregiver-invite',

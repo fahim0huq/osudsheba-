@@ -106,8 +106,12 @@ Future<double> _homeScrollExtent(WidgetTester tester, _Phone phone, String lang,
   for (var i = 0; i < 6; i++) {
     await tester.pump(const Duration(milliseconds: 300));
   }
-  // Sanity: the fixed clock was used (2 PM dose not recorded, 8 PM is next).
-  if (!detail) expect(find.text('08:00 PM'), findsOneWidget);
+  // Sanity: the fixed clock was used. At 3 PM the 2 PM dose is not recorded yet, so the
+  // card shows it, an hour late.
+  if (!detail) {
+    expect(find.text(lang == 'bn' ? 'দুপুর ২:০০' : '2:00 PM'), findsOneWidget);
+    expect(find.text(lang == 'bn' ? '১ ঘণ্টা দেরি' : '1 h late'), findsOneWidget);
+  }
   if (before != null) await before();
   final scrollable = tester.state<ScrollableState>(
     find.descendant(

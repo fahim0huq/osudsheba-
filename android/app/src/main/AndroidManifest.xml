@@ -5,11 +5,13 @@
     <!--
       Exact alarms: SCHEDULE_EXACT_ALARM only, which the user grants in "Alarms & reminders".
       If it is not granted, NotificationService falls back to inexact alarms (may ring a few
-      minutes late). USE_EXACT_ALARM and USE_FULL_SCREEN_INTENT were removed for Play policy
-      (both are reserved for alarm-clock / calling apps); reminders show as high-priority
-      alarm notifications instead of taking over the lock screen.
+      minutes late). USE_EXACT_ALARM is not used (Play policy).
+      USE_FULL_SCREEN_INTENT: the medicine alarm can open full screen over the lock screen when
+      the user chooses "Full-screen alarm" in Reminder settings. On Android 14+ the user must
+      also allow it in system settings; the app asks when that option is chosen.
     -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />

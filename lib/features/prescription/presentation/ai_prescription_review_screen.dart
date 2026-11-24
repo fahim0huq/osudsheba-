@@ -203,7 +203,7 @@ class _AiPrescriptionReviewScreenState extends ConsumerState<AiPrescriptionRevie
                     child: AppSecondaryButton(
                       text: bn ? 'নিজে লিখুন' : 'Add manually',
                       icon: Icons.edit_note_rounded,
-                      onPressed: () => context.push('/add-medicine'),
+                      onPressed: () => context.push('/new-medicine'),
                     ),
                   ),
                   const SizedBox(width: 10.0),

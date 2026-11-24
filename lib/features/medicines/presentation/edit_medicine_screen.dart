@@ -8,14 +8,12 @@ import '../../../shared/widgets/app_primary_button.dart';
 import '../../../shared/widgets/fade_slide_in.dart';
 import '../../../core/utils/time_utils.dart';
 import 'widgets/medicine_form_parts.dart';
+import 'widgets/medicine_photo_field.dart';
 
 class EditMedicineScreen extends ConsumerStatefulWidget {
   final Medicine? medicine;
 
-  const EditMedicineScreen({
-    super.key,
-    this.medicine,
-  });
+  const EditMedicineScreen({super.key, this.medicine});
 
   @override
   ConsumerState<EditMedicineScreen> createState() => _EditMedicineScreenState();
@@ -34,6 +32,7 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
   late Medicine _targetMedicine;
   bool _missing = false;
   DateTime? _endDate;
+  String? _photoPath;
 
   @override
   void initState() {
@@ -43,7 +42,8 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
     // first medicine in the list, or a blank placeholder that was then saved as a new entry.)
     final target = widget.medicine ?? ref.read(selectedMedicineProvider);
     _missing = target == null || !medList.any((m) => m.id == target.id);
-    _targetMedicine = target ??
+    _targetMedicine =
+        target ??
         Medicine(
           id: '',
           name: '',
@@ -55,6 +55,7 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
           instruction: '',
         );
     _endDate = _targetMedicine.endDate;
+    _photoPath = _targetMedicine.photoPath;
 
     _nameController = TextEditingController(text: _targetMedicine.name);
     _strengthController = TextEditingController(text: _targetMedicine.strength);
@@ -75,10 +76,7 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
   }
 
   void _addReminderTime() async {
-    final TimeOfDay? time = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.now(),
-    );
+    final TimeOfDay? time = await showTimePicker(context: context, initialTime: TimeOfDay.now());
     if (time != null) {
       setState(() {
         final formatted = formatTimeOfDay(time.hour, time.minute);
@@ -100,10 +98,8 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
     if (picked == null || !mounted) return;
     setState(() {
       final formatted = formatTimeOfDay(picked.hour, picked.minute);
-      _reminderTimes = [
-        ..._reminderTimes.where((t) => t != old && !sameTimeOfDay(t, formatted)),
-        formatted,
-      ]..sort((a, b) => minutesOfDay(a).compareTo(minutesOfDay(b)));
+      _reminderTimes = [..._reminderTimes.where((t) => t != old && !sameTimeOfDay(t, formatted)), formatted]
+        ..sort((a, b) => minutesOfDay(a).compareTo(minutesOfDay(b)));
     });
   }
 
@@ -171,8 +167,17 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
                       children: [
                         TextFormField(
                           controller: _nameController,
-                          decoration: compactFieldDecoration(bn ? 'ওষুধের নাম' : 'Medicine name',
-                              icon: Icons.medication_rounded),
+                          decoration:
+                              compactFieldDecoration(
+                                bn ? 'ওষুধের নাম' : 'Medicine name',
+                                icon: Icons.medication_rounded,
+                              ).copyWith(
+                                suffixIcon: MedicinePhotoButton(
+                                  path: _photoPath,
+                                  onChanged: (p) => setState(() => _photoPath = p),
+                                  bn: bn,
+                                ),
+                              ),
                           validator: requiredField,
                         ),
                         const SizedBox(height: kFormGap),
@@ -209,9 +214,11 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
                               padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 8.0),
                             ),
                             icon: Icon(_endDate == null ? Icons.all_inclusive_rounded : Icons.event_rounded, size: 20),
-                            label: Text(_endDate == null
-                                ? (bn ? 'শেষ: চলতে থাকবে' : 'Ends: never')
-                                : '${bn ? 'শেষ' : 'End'} ${shortDate(_endDate!)}'),
+                            label: Text(
+                              _endDate == null
+                                  ? (bn ? 'শেষ: চলতে থাকবে' : 'Ends: never')
+                                  : '${bn ? 'শেষ' : 'End'} ${shortDate(_endDate!)}',
+                            ),
                             onPressed: _selectEndDate,
                           ),
                         ),
@@ -222,7 +229,11 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
                               bn
                                   ? 'এই ওষুধের শেষ তারিখ পার হয়ে গেছে, তাই অ্যালার্ম বাজছে না।'
                                   : 'This end date has passed, so no alarms ring for this medicine.',
-                              style: const TextStyle(color: AppColors.error, fontSize: 15.0, fontWeight: FontWeight.w600),
+                              style: const TextStyle(
+                                color: AppColors.error,
+                                fontSize: 15.0,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
                         if (_endDate != null)
@@ -243,9 +254,10 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
                         TextFormField(
                           controller: _instructionController,
                           decoration: compactFieldDecoration(
-                              bn ? 'বিশেষ নির্দেশনা (ঐচ্ছিক)' : 'Special instructions (optional)',
-                              hint: 'e.g. Take with warm water',
-                              icon: Icons.note_alt_rounded),
+                            bn ? 'বিশেষ নির্দেশনা (ঐচ্ছিক)' : 'Special instructions (optional)',
+                            hint: 'e.g. Take with warm water',
+                            icon: Icons.note_alt_rounded,
+                          ),
                         ),
                       ],
                     ),
@@ -289,6 +301,8 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
       instruction: _instructionController.text.trim(),
       endDate: _endDate,
       clearEndDate: _endDate == null,
+      photoPath: _photoPath,
+      clearPhoto: _photoPath == null,
     );
 
     ref.read(medicinesProvider.notifier).updateMedicine(updatedMed);

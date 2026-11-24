@@ -1,16 +1,20 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../../../core/constants/app_colors.dart';
-import '../../../../core/services/medication_voice_service.dart';
 import '../../../../core/services/tts_service.dart';
-import '../../../../core/utils/home_schedule.dart';
 import '../../../../core/utils/dose_text.dart';
+import '../../../../core/utils/home_schedule.dart';
+import '../../../../core/utils/time_label.dart';
+import 'next_dose_visuals.dart';
 
-/// The "Next dose" card: what to take next, with Listen, Skip and Take buttons.
-/// When everything for today is done it says so and shows tomorrow's first dose
-/// (without Take/Skip, since tomorrow's dose cannot be recorded yet).
+/// The animated "Next dose" card: time, countdown, the medicines, and Listen / Skip / Taken.
+/// Green while waiting, amber when the time has come or passed, a tick when the day is done.
+/// Movement stops when the phone's "Remove animations" setting is on.
 class NextDoseCard extends StatefulWidget {
   final DoseSlot? slot;
+  final DoseMood mood;
+  final Duration wait; // until the dose (upcoming) or since it (due / late)
   final String language;
   final VoidCallback onTaken;
   final VoidCallback onSkip;
@@ -19,6 +23,8 @@ class NextDoseCard extends StatefulWidget {
   const NextDoseCard({
     super.key,
     required this.slot,
+    required this.mood,
+    required this.wait,
     required this.language,
     required this.onTaken,
     required this.onSkip,
@@ -29,29 +35,62 @@ class NextDoseCard extends StatefulWidget {
   State<NextDoseCard> createState() => _NextDoseCardState();
 }
 
-class _NextDoseCardState extends State<NextDoseCard> {
-  StreamSubscription<TtsState>? _ttsSubscription;
-  bool _isPlayingTts = false;
+class _NextDoseCardState extends State<NextDoseCard> with TickerProviderStateMixin {
+  late final AnimationController _ripple = AnimationController(vsync: this, duration: _rippleSpeed);
+  late final AnimationController _drift =
+      AnimationController(vsync: this, duration: const Duration(seconds: 7));
+  StreamSubscription<TtsState>? _tts;
+  bool _speaking = false;
+  bool _burst = false;
 
   bool get _bn => widget.language == 'bn';
+  bool get _alert => widget.mood == DoseMood.due || widget.mood == DoseMood.late;
+  Duration get _rippleSpeed => Duration(milliseconds: _alert ? 1300 : 2600);
 
   @override
   void initState() {
     super.initState();
-    _isPlayingTts = TtsService.instance.isPlaying;
-    _ttsSubscription = TtsService.instance.stateStream.listen((state) {
-      if (mounted) setState(() => _isPlayingTts = state == TtsState.playing);
+    _speaking = TtsService.instance.isPlaying;
+    _tts = TtsService.instance.stateStream.listen((s) {
+      if (mounted) setState(() => _speaking = s == TtsState.playing);
     });
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncMotion();
+  }
+
+  @override
+  void didUpdateWidget(NextDoseCard old) {
+    super.didUpdateWidget(old);
+    if (old.mood != widget.mood) {
+      _ripple.duration = _rippleSpeed;
+      _syncMotion();
+    }
+  }
+
+  void _syncMotion() {
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _ripple.stop();
+      _drift.stop();
+    } else {
+      _ripple.repeat();
+      if (!_drift.isAnimating) _drift.repeat(reverse: true);
+    }
+  }
+
+  @override
   void dispose() {
-    _ttsSubscription?.cancel();
+    _tts?.cancel();
+    _ripple.dispose();
+    _drift.dispose();
     super.dispose();
   }
 
   Future<void> _toggleAudio() async {
-    if (_isPlayingTts) {
+    if (_speaking) {
       await TtsService.instance.stop();
       return;
     }
@@ -73,158 +112,198 @@ class _NextDoseCardState extends State<NextDoseCard> {
     }
   }
 
+  void _taken() {
+    if (_burst) return;
+    HapticFeedback.mediumImpact();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      widget.onTaken();
+      return;
+    }
+    setState(() => _burst = true);
+    Future.delayed(const Duration(milliseconds: 650), () {
+      if (!mounted) return;
+      setState(() => _burst = false);
+      widget.onTaken();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final slot = widget.slot;
-    final tomorrow = slot?.isTomorrow ?? false;
-    final names = slot == null
-        ? ''
-        : slot.medicines.map((m) => '${m.name} ${m.strength}'.trim()).join(', ');
-    final count = slot?.medicines.length ?? 0;
-    final countText = _bn ? MedicationVoiceService.toBanglaDigits('$count') : '$count';
-
-    final String subtitle;
-    if (slot == null) {
-      subtitle = _bn ? 'কোনো ওষুধের সময় নির্ধারিত নেই' : 'No doses scheduled';
-    } else if (tomorrow) {
-      subtitle = _bn ? 'আগামীকাল: $names' : 'Tomorrow: $names';
-    } else if (count > 1) {
-      subtitle = _bn ? 'একসাথে $countTextটি ওষুধ' : '$count medicines together';
-    } else {
-      final m = slot.medicines.first;
-      subtitle = [doseLabel(m, _bn ? 'bn' : 'en'), _meal(m.mealRelation)].where((s) => s.trim().isNotEmpty).join(' • ');
-    }
-
-    return Material(
-      color: AppColors.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16.0),
-        side: BorderSide(color: AppColors.primary.withValues(alpha: 0.25), width: 1.2),
+    final still = MediaQuery.disableAnimationsOf(context);
+    final key = '${slot?.scheduledAt}-${widget.mood}';
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 600),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+            begin: Alignment.topLeft, end: Alignment.bottomRight, colors: moodColors(widget.mood)),
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(color: moodColors(widget.mood)[1].withValues(alpha: 0.3), blurRadius: 18, offset: const Offset(0, 8)),
+        ],
       ),
-      child: InkWell(
-        onTap: slot == null || tomorrow ? null : widget.onTap,
-        borderRadius: BorderRadius.circular(16.0),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Icon(tomorrow ? Icons.check_circle_rounded : Icons.alarm_rounded,
-                      color: tomorrow ? AppColors.success : AppColors.primary, size: 20),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      tomorrow
-                          ? (_bn ? 'আজকের সব ডোজ শেষ' : 'All done for today')
-                          : (_bn ? 'পরবর্তী ডোজ' : 'Next dose'),
-                      style: const TextStyle(
-                          color: AppColors.primaryDark, fontWeight: FontWeight.bold, fontSize: 15),
-                    ),
-                  ),
-                  if (slot != null)
-                    Flexible(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: AppColors.primaryLight,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text(
-                          slot.time, // the line below says "Tomorrow:" when it is tomorrow's dose
-                          style: const TextStyle(
-                              color: AppColors.primaryDark, fontWeight: FontWeight.bold, fontSize: 14),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-              if (slot != null && !tomorrow) ...[
-                const SizedBox(height: 4),
-                Text(
-                  names,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontSize: 17, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: Stack(
+          children: [
+            Positioned.fill(child: DriftGlow(drift: _drift)),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: AnimatedSwitcher(
+                duration: Duration(milliseconds: still ? 0 : 450),
+                switchInCurve: Curves.easeOutCubic,
+                transitionBuilder: (child, a) => FadeTransition(
+                  opacity: a,
+                  child: SlideTransition(
+                      position: Tween(begin: const Offset(0.12, 0), end: Offset.zero).animate(a), child: child),
                 ),
-              ],
-              const SizedBox(height: 2),
-              Text(
-                subtitle,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
+                child: KeyedSubtree(key: ValueKey(key), child: _content(slot)),
               ),
-              if (slot != null) ...[
-                const SizedBox(height: 8),
-                _buttons(tomorrow),
-              ],
-            ],
-          ),
+            ),
+            if (_burst) const Positioned.fill(child: Center(child: TickBurst())),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buttons(bool tomorrow) {
-    final listenColor = _isPlayingTts ? AppColors.error : AppColors.primary;
-    final listen = OutlinedButton.icon(
-      onPressed: _toggleAudio,
-      icon: Icon(_isPlayingTts ? Icons.stop_rounded : Icons.volume_up_rounded, size: 20),
-      label: Text(_isPlayingTts ? (_bn ? 'থামুন' : 'Stop') : (_bn ? 'শুনুন' : 'Listen')),
-      style: OutlinedButton.styleFrom(
-        foregroundColor: listenColor,
-        side: BorderSide(color: listenColor.withValues(alpha: 0.5)),
-        minimumSize: const Size(0, 46),
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-      ),
-    );
-    if (tomorrow) return Align(alignment: Alignment.centerLeft, child: listen);
-    // At large text sizes three buttons do not fit side by side: Listen goes on its own row.
-    final large = MediaQuery.textScalerOf(context).scale(1.0) > 1.3;
-    final record = Row(
-      children: [
-        Expanded(
-          child: OutlinedButton(
-            onPressed: widget.onSkip,
-            style: OutlinedButton.styleFrom(
-              foregroundColor: AppColors.textSecondary,
-              minimumSize: const Size(0, 46),
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-            ),
-            child: Text(_bn ? 'বাদ দিন' : 'Skip', textAlign: TextAlign.center),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: ElevatedButton(
-            onPressed: widget.onTaken,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              foregroundColor: Colors.white,
-              minimumSize: const Size(0, 46),
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-            ),
-            child: Text(_bn ? 'খেয়েছি' : 'Taken', textAlign: TextAlign.center),
-          ),
-        ),
-      ],
-    );
-    if (large) {
-      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [listen, const SizedBox(height: 8), record]);
+  Widget _content(DoseSlot? slot) {
+    final lang = widget.language;
+    final mood = widget.mood;
+    if (slot == null) {
+      return _header(Icons.event_available_rounded, _bn ? 'আজ কোনো ডোজ নেই' : 'No doses scheduled', null, null);
     }
-    return Row(children: [listen, const SizedBox(width: 8), Expanded(child: record)]);
+    final listen = CardButton(
+      icon: _speaking ? Icons.stop_rounded : Icons.volume_up_rounded,
+      label: _speaking ? (_bn ? 'থামুন' : 'Stop') : (_bn ? 'শুনুন' : 'Listen'),
+      onPressed: _toggleAudio,
+    );
+    if (mood == DoseMood.done) {
+      final n = localDigits(slot.medicines.length, lang);
+      final when = _bn
+          ? 'আগামীকাল ${displayTime(slot.time, lang)} · $nটি ওষুধ'
+          : 'Tomorrow ${displayTime(slot.time, lang)} · $n medicine${slot.medicines.length == 1 ? '' : 's'}';
+      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        _header(Icons.check_rounded, _bn ? 'আজকের সব ডোজ শেষ' : 'All doses done today', null, when),
+        const SizedBox(height: 14),
+        listen,
+      ]);
+    }
+    final label = switch (mood) {
+      DoseMood.due => _bn ? 'এখন খাওয়ার সময়' : 'Time to take',
+      DoseMood.late => _bn ? 'এখনো রেকর্ড করা হয়নি' : 'Not recorded yet',
+      _ => _bn ? 'পরের ডোজ' : 'Next dose',
+    };
+    final chip = switch (mood) {
+      DoseMood.due => _bn ? 'এখনই' : 'Now',
+      DoseMood.late => lateLabel(widget.wait, lang),
+      _ => inLabel(widget.wait, lang),
+    };
+    // Before its time a dose cannot be recorded: Skip and Taken are greyed out.
+    final early = mood == DoseMood.upcoming;
+    final skip = CardButton(
+        icon: Icons.skip_next_rounded, label: _bn ? 'বাদ দিন' : 'Skip', onPressed: early ? null : widget.onSkip);
+    final take = CardButton(
+      icon: Icons.check_rounded,
+      label: _bn ? 'খেয়েছি' : 'Taken',
+      onPressed: early ? null : _taken,
+      primary: true,
+      textColor: _alert ? const Color(0xFF92400E) : AppColors.primaryDark,
+    );
+    final large = MediaQuery.textScalerOf(context).scale(1.0) > 1.3;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _header(_alert ? Icons.notifications_active_rounded : Icons.medication_rounded, displayTime(slot.time, lang),
+          label, chip),
+      const SizedBox(height: 12),
+      _medicines(slot),
+      const SizedBox(height: 12),
+      if (large) ...[
+        Row(children: [Expanded(child: listen), const SizedBox(width: 10), Expanded(child: skip)]),
+        const SizedBox(height: 10),
+        take,
+      ] else
+        Row(children: [
+          Expanded(flex: 4, child: listen),
+          const SizedBox(width: 10),
+          Expanded(flex: 4, child: skip),
+          const SizedBox(width: 10),
+          Expanded(flex: 7, child: take),
+        ]),
+      if (early) ...[
+        const SizedBox(height: 8),
+        Text(notYetText(slot.time, lang),
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white.withValues(alpha: 0.92), fontSize: 15, fontWeight: FontWeight.w600)),
+      ],
+    ]);
   }
 
-  String _meal(String meal) {
-    if (meal.trim().isEmpty || meal == 'None') return '';
-    if (!_bn) return meal;
-    return const {'Before Meal': 'খাবারের আগে', 'After Meal': 'খাবারের পরে', 'With Meal': 'খাবারের সাথে'}[meal] ??
-        meal;
+  Widget _header(IconData icon, String title, String? label, String? chip) {
+    return Row(children: [
+      RippleIcon(ripple: _ripple, icon: icon, wiggle: _alert),
+      const SizedBox(width: 14),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (label != null)
+            Text(label,
+                style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.92), fontSize: 15, fontWeight: FontWeight.w600)),
+          Text(title,
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: label == null ? 22 : 30,
+                  fontWeight: FontWeight.w800,
+                  height: 1.15)),
+          if (chip != null) ...[
+            const SizedBox(height: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+              decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.22), borderRadius: BorderRadius.circular(20)),
+              child: Text(chip,
+                  style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ]),
+      ),
+    ]);
+  }
+
+  /// The medicines in this slot (up to three, then "+2 more"). Tapping opens the dose screen.
+  Widget _medicines(DoseSlot slot) {
+    final lang = widget.language;
+    final shown = slot.medicines.take(3).toList();
+    final more = slot.medicines.length - shown.length;
+    return Material(
+      color: Colors.white.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: widget.onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            for (final m in shown) ...[
+              Text('${m.name} ${m.strength}'.trim(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.bold)),
+              Text(
+                  [doseLabel(m, lang), mealLabel(m.mealRelation, lang)].where((s) => s.isNotEmpty).join(' · '),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: Colors.white.withValues(alpha: 0.88), fontSize: 15)),
+              if (m != shown.last) const SizedBox(height: 6),
+            ],
+            if (more > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(_bn ? 'আরও ${localDigits(more, lang)}টি' : '+$more more',
+                    style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+              ),
+          ]),
+        ),
+      ),
+    );
   }
 }

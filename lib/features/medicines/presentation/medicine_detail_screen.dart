@@ -7,9 +7,12 @@ import '../../../core/models/mock_models.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../core/providers/clock_provider.dart';
 import '../../../core/services/notification_service.dart';
+import '../../../core/utils/home_schedule.dart';
 import '../../../core/utils/schedule_utils.dart';
+import '../../../core/utils/time_label.dart';
 import '../../../core/utils/time_utils.dart';
 import 'widgets/medicine_detail_parts.dart';
+import 'widgets/stock_card.dart';
 
 class MedicineDetailScreen extends ConsumerStatefulWidget {
   final Medicine? medicine;
@@ -194,7 +197,9 @@ class _MedicineDetailScreenState extends ConsumerState<MedicineDetailScreen> {
             const SizedBox(height: 8),
             MedicineDetailFacts(medicine: currentMed, bn: bn),
             MedicineWeekSummary(taken: weekTaken, recorded: weekRecorded, bn: bn),
-            const SizedBox(height: 14),
+            const SizedBox(height: 6),
+            StockCard(medicine: currentMed, lang: lang),
+            const SizedBox(height: 10),
             if (currentMed.times.length > 1) ...[
               Text(
                 bn ? 'কোন সময়ের ডোজ?' : 'Which dose?',
@@ -241,6 +246,14 @@ class _MedicineDetailScreenState extends ConsumerState<MedicineDetailScreen> {
                       ),
                     );
                 },
+              )
+            else if (activeTime != null && !doseTimeHasCome(activeTime, now))
+              // Before its time a dose cannot be recorded.
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Text(notYetText(activeTime, lang),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
               )
             else ...[
               Row(

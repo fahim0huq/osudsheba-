@@ -29,7 +29,9 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
   String? _errorMessage;
 
   Timer? _countdownTimer;
-  int _countdownSeconds = 60;
+  // AppsPro allows 10 OTP SMS per hour per number and recommends a 120 s resend wait.
+  static const _resendWaitSeconds = 120;
+  int _countdownSeconds = _resendWaitSeconds;
   bool _canResend = false;
 
   // After the OTP: the operator is still charging ("pending"). Poll until it unlocks.
@@ -141,7 +143,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
 
   void _startCountdown() {
     setState(() {
-      _countdownSeconds = 60;
+      _countdownSeconds = _resendWaitSeconds;
       _canResend = false;
     });
     _countdownTimer?.cancel();
@@ -477,7 +479,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                               ),
                             ),
                             Text(
-                              isBn ? ' / দিন ' : ' / day ',
+                              ' / ${pricing.periodLabel(isBn)} ',
                               style: const TextStyle(color: Colors.white70, fontSize: 13.0),
                             ),
                             Text(
@@ -727,10 +729,21 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                       const SizedBox(height: 12.0),
                       Center(
                         child: Text(
-                          isBn ? pricing.vatSdText ?? '+ ভ্যাট, এসডি ও এসসি প্রযোজ্য' : '+ VAT, SD & SC applicable',
+                          pricing.taxLine(isBn),
+                          textAlign: TextAlign.center,
                           style: const TextStyle(fontSize: 13.5, color: AppColors.textSecondary),
                         ),
                       ),
+                      // BDApps requires this price line before subscribing. AppsPro writes
+                      // it (in English), so it is shown as sent.
+                      if (pricing.disclosure != null) ...[
+                        const SizedBox(height: 6.0),
+                        Text(
+                          pricing.disclosure!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontSize: 12.5, color: AppColors.textSecondary),
+                        ),
+                      ],
                     ],
                   ),
                 ),

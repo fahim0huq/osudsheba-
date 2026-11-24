@@ -1,268 +1,193 @@
-# OsudSheba — AppsPro & BDApps Subscription System Integration
+# OsudSheba — AppsPro & BDApps Subscription Integration
 
-This document serves as the complete technical reference for the AppsPro (BDApps Direct Carrier Billing) subscription integration for OsudSheba.
+Technical reference for the AppsPro (BDApps direct carrier billing) subscription in OsudSheba.
+Source of truth for every AppsPro endpoint and field: https://appspro.dev/docs (checked 2026-11-24).
 
 ---
 
-## 1. Architecture Overview
+## 1. Architecture
 
-OsudSheba is a **premium-only** application with zero free tier. Users must hold an active or pending carrier billing subscription (Robi / Airtel via BDApps) to access any application features.
+OsudSheba is **premium-only**: every non-public screen needs an active carrier-billing
+subscription (Robi / Airtel through BDApps). The app never talks to AppsPro directly; it talks to
+our server with a Firebase ID token, and the server holds the AppsPro secret key. This is the
+"route through your own server" pattern from the AppsPro docs.
 
 ```
-                  ┌────────────────────────────────────────┐
-                  │            OSUDSHEBA FLUTTER           │
-                  │   - Riverpod (subscriptionProvider)    │
-                  │   - GoRouter Centralized Redirect Guard│
-                  │   - AppStartupGate Gating              │
-                  │   - Bilingual Subscription Screen      │
-                  └──────────────────┬─────────────────────┘
-                                     │ Authorization: Bearer <Firebase ID Token>
-                                     ▼
-                  ┌────────────────────────────────────────┐
-                  │            OSUDSHEBA BACKEND           │
-                  │   - Firebase Admin Auth Middleware     │
-                  │   - requireSubscription Middleware     │
-                  │   - AppsPro Service & Proxy Controller │
-                  │   - Raw-Body HMAC-SHA256 Webhook Engine│
-                  │   - Persistent Firestore Database      │
-                  └─────────┬───────────────────▲──────────┘
-      Authorization: Bearer │                   │ Signed HTTPS POST
-         <APPSPRO_SECRET_KEY│                   │ X-Signature / HMAC
-                            ▼                   │
-                  ┌─────────────────────────────┴──────────┐
-                  │                 APPSPRO                │
-                  │         api.appspro.dev/api/v1         │
-                  └──────────────────┬─────────────────────┘
-                                     │
-                                     ▼
-                  ┌────────────────────────────────────────┐
-                  │                 BDAPPS                 │
-                  │           Robi / Airtel DCB            │
-                  └────────────────────────────────────────┘
+Flutter app ──(Bearer <Firebase ID token>)──▶ OsudSheba server (Render)
+                                                │  Bearer <APPSPRO_SECRET_KEY>
+                                                ▼
+                                    api.appspro.dev/api/v1/sdk/*
+                                                │
+                                    BDApps (Robi / Airtel DCB)
+                                                │ notify callback
+AppsPro ──(signed POST, X-Signature)──▶ OsudSheba server /webhooks/appspro
 ```
 
 ---
 
-## 2. Environment Configuration
+## 2. AppsPro services: what OsudSheba needs and where it lives
 
-### Backend (`server/.env`)
+| AppsPro service (docs section) | Needed? | State | Where |
+|---|---|---|---|
+| Request OTP `POST /sdk/otp/request` (+ `external_user_id`) | Yes | Done | `server/services/appspro.service.js` `requestOtp`; route `POST /subscription/otp/request` |
+| Verify OTP `POST /sdk/otp/verify` (unlock from the reply, not the webhook) | Yes | Done | `verifyOtp`; route `POST /subscription/otp/verify` |
+| Live status by phone `POST /sdk/status` | Yes | Done | `getLiveStatusByPhone`; used by the status re-check in `subscription.controller.js` |
+| Verify subscriber `GET /sdk/verify/{subscriber_id}` | Yes | Done | `getSubscriberStatus`; second source for the pending re-check |
+| Unsubscribe `POST /sdk/unsubscribe` (success = `S1000` or `UNREGISTERED`) | Yes | Done | `unsubscribe` + `unsubscribeConfirmed`; route `POST /subscription/unsubscribe` |
+| App info `GET /sdk/app-info` (pricing list, `disclosure_md`) | Yes | Done (Nov 2026: the app now reads the documented `pricing` list and shows the total and disclosure) | `getAppInfo`; `AppPricingInfo` in `lib/core/models/subscription.dart` |
+| Privacy scrub `DELETE /sdk/subscribers/by-external-id/{id}` | Yes (account deletion) | Done (Nov 2026) | `deleteSubscriberByExternalId`; called by `DELETE /subscription/account` |
+| Webhooks: signature, replay window, idempotency, `subscriber.*`, `sms.received`, `ussd.received` | Yes | Done | `server/webhooks/appspro.webhook.js` |
+| List subscribers `GET /sdk/subscribers` | Diagnostics only | Done | `testProtectedSubscribers` (startup check, logs status only) |
+| Batch verify `POST /sdk/verify/batch` | Optional (reconciler) | Client method only | `verifySubscriberBatch`; no scheduled job (per-request re-check covers it) |
+| Direct subscribe `POST /sdk/subscribe` (no OTP) | No | Deliberately not exposed | Docs: trusted server-to-server only; a route would let a user subscribe someone else's number |
+| Flutter SDK `appspro_sdk` widgets | No (own UI) | Dependency present, not used | `SubscriptionService.configureNativeSdk` is never called; the app uses its own screens and the server proxy |
+| Hosted checkout `/s/{slug}`, WebSDK, `/embed`, `generate-token`, `subscription_token` routes | No | Not used | Docs: a proxying app needs none of the subscription-token routes |
+| Sending SMS / charging from our backend | Not available | — | Docs: not part of the public API; use the AppsPro dashboard |
+| USSD menus | No | Inbound events are only logged | — |
 
-All AppsPro credentials reside strictly on the server:
+---
 
-```ini
-# Server Port
-PORT=3000
+## 3. Environment
 
-# Firebase Project Configuration
-FIREBASE_PROJECT_ID=osudsheba-7b88a
-ALLOW_MOCK_AUTH=true
+### Server (`server/.env` locally, Render environment variables in production)
 
-# AppsPro Configuration (BDApps Direct Carrier Billing)
-APPSPRO_BASE_URL=https://api.appspro.dev/api/v1
-APPSPRO_PUBLISHABLE_KEY=pk_live_your_publishable_key
-APPSPRO_SECRET_KEY=sk_live_your_secret_key
-APPSPRO_APP_ID=app_your_appspro_app_id
-APPSPRO_WEBHOOK_SECRET=whsec_your_webhook_signing_secret
-APPSPRO_ENV=production
-```
+Key names only; never commit values.
+
+| Key | Purpose |
+|---|---|
+| `APPSPRO_BASE_URL` | `https://api.appspro.dev/api/v1` |
+| `APPSPRO_SECRET_KEY` | SDK Bearer key (`sk_…`); also the webhook HMAC key when no signing secret is set |
+| `APPSPRO_PUBLISHABLE_KEY` | `pk_…`, used for `/sdk/app-info` |
+| `APPSPRO_WEBHOOK_SECRET` | Webhook signing secret, if one is set in the dashboard |
+| `APPSPRO_ENV` | `production` or `sandbox` (sandbox also allows non-Robi/Airtel test numbers) |
+| `APPSPRO_ALLOW_SIMULATION` | `true` only for local tests; ignored when `NODE_ENV=production` |
+| `NODE_ENV` | `production` on Render |
+| `FIREBASE_PROJECT_ID`, `ALLOWED_ORIGINS`, `DIAGNOSTICS_TOKEN` | Firebase project, CORS list, operator-only diagnostics |
 
 > [!CAUTION]
-> **Strict Security Rule**: Never put `APPSPRO_SECRET_KEY` or `APPSPRO_WEBHOOK_SECRET` in Flutter code, assets, `pubspec.yaml`, or Git. The client communicates solely with the OsudSheba backend using Firebase ID tokens.
+> Never put `APPSPRO_SECRET_KEY` or `APPSPRO_WEBHOOK_SECRET` in Flutter code, assets or Git.
+> Only the publishable key may ship in the app.
+
+### Sandbox
+
+AppsPro sandbox keys (dashboard → API & SDK → Sandbox Keys) hit a mock carrier: no SMS, no charges,
+OTP always `000000`. The sandbox app and its keys are deleted when the app is published, so
+production must use the production keys.
 
 ---
 
-## 3. Database Structure
+## 4. Data
 
 ### `subscriptions/{firebaseUid}`
-Maintains the authoritative subscription entitlement per user:
 
-| Field | Type | Description |
-|---|---|---|
-| `uid` | `string` | Firebase Auth UID (authoritative identity) |
-| `externalUserId` | `string` | Maps 1:1 to Firebase UID in AppsPro |
-| `appsproSubscriberId` | `string \| null` | BDApps/AppsPro subscriber identifier |
-| `appsproLocalSubscriberId`| `string \| null` | AppsPro internal entity ID |
-| `phone` | `string \| null` | Normalized subscriber phone (01XXXXXXXXX) |
-| `phoneMasked` | `string \| null` | Masked phone for safe display (01812***678) |
-| `status` | `string` | Normalized status (`active`, `pending`, `cancelled`, etc.) |
-| `originalStatus` | `string` | Verbatim status reported by AppsPro |
-| `entitlementActive` | `boolean` | `true` for active & pending; `false` otherwise |
-| `frequency` | `string` | Billing cadence (`daily`) |
-| `subscriptionType` | `string` | `carrier_billing` |
-| `subscribedAt` | `timestamp` | First subscribed timestamp |
-| `cancelledAt` | `timestamp` | Cancellation timestamp |
-| `lastVerifiedAt` | `timestamp` | Last verification timestamp |
-| `source` | `string` | `"appspro"` |
-| `isSandbox` | `boolean` | `true` when running under sandbox credentials |
-| `createdAt` | `timestamp` | Record creation time |
-| `updatedAt` | `timestamp` | Record update time |
+| Field | Description |
+|---|---|
+| `uid` / `externalUserId` | Firebase UID; sent to AppsPro as `external_user_id` |
+| `appsproSubscriberId` | BDApps subscriber id (`tel:880…`) |
+| `appsproLocalSubscriberId` | AppsPro `local_subscriber_id` |
+| `phone`, `phoneMasked` | The number the OTP went to (never one sent by the app) |
+| `status`, `originalStatus` | Normalised (`active`, `pending`, `cancelled`, `inactive`, …) and verbatim |
+| `entitlementActive` | `true` only for `active` (see §6 on `pending`) |
+| `frequency`, `subscribedAt`, `cancelledAt`, `lastVerifiedAt`, `isSandbox`, `createdAt`, `updatedAt` | |
 
-### `appspro_webhook_events/{eventId}`
-Enforces idempotency and provides an audit trail:
+### `appspro_webhook_events/{X-Event-Id}`
 
-| Field | Type | Description |
-|---|---|---|
-| `eventId` | `string` | AppsPro `X-Event-Id` |
-| `eventType` | `string` | `subscriber.created`, `subscriber.cancelled`, etc. |
-| `occurredAt` | `timestamp` | Event timestamp from payload |
-| `externalUserId` | `string` | Associated user UID |
-| `subscriberId` | `string` | Associated subscriber identifier |
-| `processingStatus` | `string` | `processed` \| `failed` \| `received` |
-| `receivedAt` | `timestamp` | Receipt timestamp |
-| `processedAt` | `timestamp` | Processing completion timestamp |
-| `payloadMetadata` | `object` | Safe metadata (excluding raw secrets) |
+`eventType`, `occurredAt`, `externalUserId`, `subscriberId`, `processingStatus`
+(`received` → `processed`, or `failed`), `receivedAt`, `processedAt`, `payloadMetadata`.
+Only `processed` counts as a duplicate, so AppsPro's retry of a `failed` event is applied.
 
 ---
 
-## 4. Backend Endpoints
+## 5. Server endpoints (Firebase ID token unless marked public)
 
-### User Subscription Routes (Authenticated via Firebase ID Token)
+Each route is mounted under both `/subscription/*` and `/appspro/*` (the paths the AppsPro proxy
+backend expects).
 
-1. **`GET /subscription/status`** (and alias `GET /appspro/subscription`):
-   - Header: `Authorization: Bearer <Firebase ID Token>`
-   - Returns entitlement state:
-     ```json
-     {
-       "success": true,
-       "valid": true,
-       "subscription": {
-         "status": "active",
-         "entitlementActive": true,
-         "frequency": "daily",
-         "phoneMasked": "01812***678",
-         "subscribedAt": "2026-09-04T09:00:00.000Z"
-       }
-     }
-     ```
+| Route | What it does |
+|---|---|
+| `GET /status` (alias `GET /subscription`) | `{ success, valid, status, reason, subscription }` (`reason` is `null` when valid). Re-checks an active plan with AppsPro every 15 min and a pending one every 15 s. |
+| `GET /app-info` (public) | AppsPro `/sdk/app-info` payload as sent. If AppsPro is unreachable: same shape with `fallback: true`, last known price, no tax total, no disclosure. |
+| `POST /otp/request` | Body `{ phone }`. Robi/Airtel only (except sandbox). 6 per 10 min per user. Already-registered numbers are granted only to the Firebase-verified owner. |
+| `POST /otp/verify` | Body `{ reference_no, otp }`. Only the account that requested the OTP may verify it. `REGISTERED` → active; charging pending → `pending` (locked, app waits). |
+| `POST /unsubscribe` | Cancels at AppsPro; reports cancelled only on `S1000` / `UNREGISTERED`. |
+| `DELETE /account` | Refuses (409) while billing runs. Otherwise asks AppsPro to scrub the number (`DELETE /sdk/subscribers/by-external-id/{uid}`, 404 = nothing held), then deletes our record and cloud backup. If the scrub fails: 502 `BILLING_DATA_DELETE_FAILED` and nothing is deleted. |
+| `GET /diagnostic` | Hidden unless `DIAGNOSTICS_TOKEN` is set and sent as `x-diagnostics-token`. |
 
-2. **`GET /subscription/app-info`** (and alias `GET /appspro/app-info`):
-   - Returns pricing, supported carriers (`Robi`, `Airtel`), and statutory tax disclosures.
+There is no `/subscribe` route (OTP-free subscribe is server-to-server only).
+`/web-subscription/*` serves the website (phone + OTP, no login); its `app-info` keeps a single
+`pricing` object and adds `amount_inclusive` and `disclosure_md` from AppsPro.
 
-3. **`POST /subscription/otp/request`** (and alias `POST /appspro/otp/request`):
-   - Body: `{"phone": "01812345678"}`
-   - Rate limited to 6 requests / 10 minutes per user.
-   - Forwards request to AppsPro with `external_user_id = req.user.uid`.
-   - Returns `{ "success": true, "reference_no": "..." }`.
-
-4. **`POST /subscription/otp/verify`** (and alias `POST /appspro/otp/verify`):
-   - Body: `{"referenceNo": "...", "otp": "..."}`
-   - On successful AppsPro verification (`REGISTERED` / `ACTIVE` / `PENDING`):
-     - Immediately persists subscription in Firestore.
-     - Sets `entitlementActive = true`.
-     - Returns `{ "success": true, "valid": true, "entitlementActive": true }`.
-     - **Note**: Entitlement is granted immediately; the app does NOT wait for the webhook.
-
-5. **`POST /subscription/unsubscribe`** (and alias `POST /appspro/unsubscribe`):
-   - Authenticated user.
-   - Queries stored subscription; calls AppsPro to cancel subscription for the verified phone.
-   - Updates record to `cancelled`, `entitlementActive = false`.
-
-### Premium API Access Control
-
-- **`POST /analyze-prescription`** (removed in Nov 2026: scanning now runs on the phone, so this
-  route and its Replicate/Gemini call no longer exist; kept here as an example of the gating pattern):
-  Protected by `requireSubscription` middleware.
-  Unentitled users receive `HTTP 403`:
-  ```json
-  {
-    "success": false,
-    "error": "SUBSCRIPTION_REQUIRED",
-    "message": "An active OsudSheba subscription is required to access this feature."
-  }
-  ```
+`POST /analyze-prescription` was removed in Nov 2026 (scanning runs on the phone).
+`requireSubscription` middleware (403 `SUBSCRIPTION_REQUIRED`) remains for any future paid route.
 
 ---
 
-## 5. Webhook Implementation (`POST /webhooks/appspro`)
+## 6. Webhook (`POST /webhooks/appspro`, public, signed)
 
-The AppsPro webhook endpoint is public (unauthenticated by Firebase) and secured via raw-body cryptographic signature verification:
+1. Mounted with `express.raw({ type: 'application/json' })` before `express.json()`.
+2. `X-Timestamp` must be within 300 s.
+3. `sha256(raw body)` must equal `X-Body-Sha256`.
+4. `X-Signature` must equal hex HMAC-SHA256 of `"<X-Timestamp>."` + the **raw bytes**
+   (concatenated as bytes, never decoded), keyed with `APPSPRO_WEBHOOK_SECRET`, else `APPSPRO_SECRET_KEY`.
+5. Idempotent on `X-Event-Id`.
+6. Events:
+   - `subscriber.created` / `subscriber.reactivated` (and `subscriber.verified`, which the dashboard
+     lists): the subscriber's `data.status` decides. `REGISTERED` grants; a `created` without a status
+     or with a pending status never overwrites an active plan.
+   - `subscriber.cancelled`: cancelled, premium removed.
+   - any other `subscriber.<status>`: stored normalised; unknown statuses fail closed.
+   - `sms.received`, `ussd.received`: logged (masked `data.sourceAddress`), nothing else.
 
-1. **Raw Body Ingestion**: Express route is mounted with `express.raw({ type: 'application/json' })` BEFORE `express.json()`.
-2. **Timestamp Verification**: Rejects requests where `|Date.now() - X-Timestamp| > 300 seconds` with `HTTP 401`.
-3. **Body SHA256 Verification**: Computes `crypto.createHash('sha256').update(rawBody).digest('hex')` and validates against `X-Body-Sha256` using `crypto.timingSafeEqual`.
-4. **HMAC-SHA256 Verification**: Computes HMAC over `<timestamp>.<raw_body>` using `APPSPRO_WEBHOOK_SECRET` (or `APPSPRO_SECRET_KEY`) and validates against `X-Signature` using `crypto.timingSafeEqual`.
-5. **Idempotency Check**: Checks `appspro_webhook_events/{eventId}`. Duplicate deliveries return `HTTP 200 { duplicate: true }` without re-running state mutations.
-6. **Event Dispatch**:
-   - `subscriber.created`: sets `active`, `entitlementActive = true`.
-   - `subscriber.reactivated`: sets `active`, `entitlementActive = true`.
-   - `subscriber.cancelled`: sets `cancelled`, `entitlementActive = false`.
-   - `subscriber.<status>`: normalized gracefully; unknown states fail closed without crashing.
-   - `sms.received` & `ussd.received`: logged and recorded safely.
-
----
-
-## 6. Flutter Architecture & Gating
-
-### Centralized Subscription Provider (`subscriptionProvider`)
-- Tracks `loading`, `active`, `pending`, `notSubscribed`, `cancelled`, `inactive`, `error`.
-- Optimistically caches entitlement in Hive (`subscription_cache_$uid`) to avoid UI screen flicker on app launch, then immediately validates against backend.
-- Automatically resets and purges state when the user logs out.
-
-### Startup & Router Protection
-1. **`AppStartupGate`**:
-   - Evaluates authentication first.
-   - If authenticated, waits for subscription verification.
-   - If unentitled (`notSubscribed`, `cancelled`, `inactive`), routes directly to `/subscription`.
-   - If entitled, routes to main app (`/home` or profile setup).
-2. **`GoRouter` Redirect Guard**:
-   - Intercepts any direct navigation or deep link to premium routes (`/home`, `/medicines`, `/upload-prescription`, `/adherence`, `/caregiver`, `/settings`, etc.).
-   - Automatically redirects unentitled users to `/subscription`.
-
-### UI Screens
-- **`SubscriptionScreen`**:
-  - Medical-grade design matching OsudSheba theme (`AppColors`).
-  - Highlights premium features (AI Prescription Scanner, Reminders, Voice TTS, Caregiver alerts).
-  - Dynamic pricing (BDT 2.00 / day).
-  - Phone entry (Robi / Airtel BDApps carrier billing).
-  - 6-digit OTP verification with countdown timer and resend.
-  - Immediate entitlement unlock upon verification.
-- **`SettingsScreen`**:
-  - "সাবস্ক্রিপশন ও প্রিমিয়াম" (Subscription & Premium) tile.
-  - Displays plan details, status badge, masked phone, subscribed date.
-  - "সাবস্ক্রিপশন বাতিল করুন" (Cancel Subscription) with confirmation modal.
+**Pending is locked on purpose.** AppsPro's SDK treats `pending` as subscribed. OsudSheba does not:
+it waits (polling every 5–15 s) until the operator confirms the charge, so nobody gets premium
+without paying. The pending re-check never cancels an attempt.
 
 ---
 
-## 7. Testing & Sandbox Mode
+## 7. Flutter app
 
-### Sandbox Details
-- In sandbox mode (`APPSPRO_ENV=sandbox`), BDApps uses a mock carrier.
-- No real mobile charges occur.
-- No real SMS is delivered.
-- The verification OTP is always **`000000`**.
+- `lib/core/services/subscription_service.dart`: HTTP calls to the routes above.
+- `lib/core/providers/subscription_provider.dart`: `subscriptionProvider` (Hive cache per uid, then
+  server check; reset on logout) and `appPricingInfoProvider`.
+- `lib/app/router.dart`: redirect guard sends unentitled users to `/subscription`.
+- `SubscriptionScreen`: price and billing period from AppsPro app-info; the tax line shows AppsPro's
+  `price_inclusive` total when sent; the BDApps-required `disclosure_md` line is shown as sent
+  (English, from AppsPro). Phone → 6-digit OTP with a **120 s** resend wait (AppsPro allows 10 OTP
+  SMS per number per hour) → waiting card while the charge is pending.
+- Settings: subscription status, masked phone, cancel with confirmation; account deletion cancels first.
 
-### Running Backend Tests
-Execute the comprehensive automated test suite:
+---
+
+## 8. Tests
+
 ```bash
-cd server
-node test/subscription.test.js
+cd server && npm test        # all offline suites; AppsPro keys are blanked, never contacted
+flutter analyze && flutter test
 ```
-Validates:
-- Valid HMAC-SHA256 signature acceptance (200).
-- Body hash mismatch rejection (401).
-- Stale/expired timestamp rejection (401).
-- Invalid HMAC signature rejection (401).
-- Event idempotency (duplicate event ID ignored).
-- Lifecycle events (`created`, `cancelled`, `reactivated`).
-- Premium endpoint gating (a test endpoint: 403 without subscription, 200 with subscription).
-- Inbound SMS & USSD ingestion.
+
+Server suites: `subscription`, `web_subscription`, `security`, `family`, `appspro_flow`,
+`appspro_docs` (documented contracts: privacy scrub, status `reason`, app-info shape, raw-byte
+HMAC, failed-event retry). `test/test_live_appspro.js` calls the real API and is never run by `npm test`.
+Flutter: `test/app_pricing_info_test.dart` covers the app-info pricing list.
 
 ---
 
-## 8. AppsPro Dashboard Configuration Checklist
+## 9. Operator checklist (outside the code)
 
-1. **Webhook URL**:
-   Set in the AppsPro Dashboard under **Webhooks**:
-   `https://<YOUR_DOMAIN>/webhooks/appspro`
-2. **Subscribed Events**:
-   - `subscriber.created`
-   - `subscriber.reactivated`
-   - `subscriber.cancelled`
-   - `subscriber.<status>`
-   - `sms.received`
-   - `ussd.received`
-3. **Rotating Credentials**:
-   - Generate a new Secret Key in AppsPro Dashboard.
-   - Update `APPSPRO_SECRET_KEY` (and `APPSPRO_WEBHOOK_SECRET` if separate) in server environment.
-   - Restart the server: `npm start`.
-   - Never commit keys to source control.
+**BDApps developer portal** (developer.bdapps.com)
+- SMS MO URL `https://api.appspro.dev/bdapps/sms`, USSD URL `https://api.appspro.dev/bdapps/ussd`,
+  subscription notify URL `https://api.appspro.dev/bdapps/notify`, delivery report URL
+  `https://api.appspro.dev/bdapps/report`.
+- Whitelist AppsPro's outbound IP `217.15.160.79`.
+- Ask BDApps support to **activate the Unsubscription, Subscriber Status and SMS APIs** for the
+  app. Until then unsubscribe and `/sdk/status` fail (the pending re-check falls back to `/sdk/verify`).
+
+**AppsPro dashboard**
+- Webhook URL `https://osudsheba.onrender.com/webhooks/appspro`; events `subscriber.created`,
+  `subscriber.reactivated`, `subscriber.cancelled`, the other `subscriber.*` statuses, and
+  optionally `sms.received` / `ussd.received`.
+- If a webhook signing secret is set, put the same value in `APPSPRO_WEBHOOK_SECRET` on Render.
+- Production keys on Render (sandbox keys are deleted at publish).
+
+**Rotating the secret key**: regenerate in the dashboard (shown once), update `APPSPRO_SECRET_KEY`
+on Render, redeploy. Never commit keys.

@@ -174,6 +174,7 @@ class SubscriptionController {
           success: true,
           valid: false,
           status: 'not_subscribed',
+          reason: 'not_subscribed', // proxy contract: { valid, status, reason? }
           subscription: {
             status: 'not_subscribed',
             entitlementActive: false,
@@ -189,6 +190,7 @@ class SubscriptionController {
         success: true,
         valid: sub.entitlementActive,
         status: sub.status,
+        reason: sub.entitlementActive ? null : sub.status,
         subscription: {
           status: sub.status,
           entitlementActive: sub.entitlementActive,
@@ -570,6 +572,23 @@ class SubscriptionController {
           error: 'SUBSCRIPTION_STILL_ACTIVE',
           message: 'Cancel the subscription before deleting the account, so your operator stops charging you.',
         });
+      }
+
+      // A user who ever subscribed left their phone number at AppsPro, tied to this uid as
+      // external_user_id. Ask AppsPro to scrub it before deleting our own copy; if that fails,
+      // delete nothing so the user can retry instead of being told everything is gone.
+      if (sub) {
+        try {
+          await AppsProService.deleteSubscriberByExternalId(uid);
+        } catch (scrubErr) {
+          console.error('[SubscriptionController] AppsPro scrub failed:', scrubErr.message);
+          return res.status(502).json({
+            success: false,
+            error: 'BILLING_DATA_DELETE_FAILED',
+            message: 'আপনার নম্বর বিল-প্রদানকারী (AppsPro) থেকে মোছা যায়নি। কিছুক্ষণ পরে আবার চেষ্টা করুন।',
+            messageEn: 'Could not remove your number from the billing provider (AppsPro). Please try again later.',
+          });
+        }
       }
 
       await SubscriptionService.deleteSubscription(uid);

@@ -112,7 +112,8 @@ async function appsproFetch(endpoint, options = {}) {
     });
 
     req.on('error', (err) => {
-      const sanitizedMsg = (err.message || 'Network connection failed').replace(SECRET_KEY, '[REDACTED_SECRET]');
+      const rawMsg = err.message || 'Network connection failed';
+      const sanitizedMsg = SECRET_KEY ? rawMsg.split(SECRET_KEY).join('[REDACTED_SECRET]') : rawMsg;
       const networkErr = new Error(`Connection to AppsPro failed: ${sanitizedMsg}`);
       networkErr.status = 502;
       reject(networkErr);
@@ -142,20 +143,19 @@ class AppsProService {
     } catch (err) {
       console.error(`[AppsPro Diagnostics] getAppInfo response (HTTP ${err.status || 500}):`, JSON.stringify(err.data || err.message));
       console.warn('[AppsPro] getAppInfo failed, returning fallback metadata:', err.message);
+      // Same shape as AppsPro's /sdk/app-info, so the app has one format to read.
+      // `fallback: true` tells the app this is our last known price, not AppsPro's answer,
+      // and there is no tax-inclusive total or disclosure to show.
       return {
-        app_id: process.env.APPSPRO_APP_ID || 'osudsheba',
         name: 'OsudSheba',
-        pricing: {
-          amount: '2.00',
-          currency: 'BDT',
-          frequency: 'daily',
-          tax_inclusive: false,
-          vat_percentage: '15%',
-          sd_percentage: '15%',
-          sc_percentage: '1%',
-        },
-        supported_carriers: ['Robi', 'Airtel'],
-        carrier_billing_provider: 'BDApps',
+        publishable_key: PUBLISHABLE_KEY,
+        pricing: [
+          { method_name: 'bdapps', display_name: 'Robi / Airtel', price: '2.00', price_inclusive: null, billing_period: 'daily' },
+        ],
+        disclosure_md: null,
+        is_sandbox: process.env.APPSPRO_ENV === 'sandbox',
+        supported_countries: ['BD'],
+        fallback: true,
       };
     }
   }
@@ -399,6 +399,30 @@ class AppsProService {
           status: 'unsubscribed',
           message: 'Unsubscribed successfully (Sandbox)'
         };
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Privacy scrub for account deletion:
+   * DELETE /api/v1/sdk/subscribers/by-external-id/{external_user_id} (204 on success).
+   * Removes the phone and external_user_id from AppsPro's subscriber row. It does NOT stop
+   * carrier billing (AppsPro docs), so callers must unsubscribe first.
+   * A 404 means AppsPro holds nothing for this user, which is the outcome we want.
+   */
+  static async deleteSubscriberByExternalId(externalUserId) {
+    console.log(`[AppsPro] Scrubbing subscriber data for external_user_id: ${externalUserId}`);
+    try {
+      await appsproFetch(`/sdk/subscribers/by-external-id/${encodeURIComponent(externalUserId)}`, {
+        method: 'DELETE',
+      });
+      return { scrubbed: true };
+    } catch (err) {
+      if (err.status === 404) return { scrubbed: false, notFound: true };
+      if (sandboxSimulationAllowed()) {
+        console.log(`[AppsPro Sandbox] Simulated subscriber scrub for ${externalUserId} (${err.message})`);
+        return { scrubbed: true, simulated: true };
       }
       throw err;
     }

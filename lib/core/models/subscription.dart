@@ -147,32 +147,86 @@ class Subscription {
   }
 }
 
+/// Price shown on the subscription screen, read from AppsPro's `GET /api/v1/sdk/app-info`
+/// (through our server's `/subscription/app-info`). That payload sends `pricing` as a list of
+/// methods `{ method_name, display_name, price, price_inclusive, billing_period }` and a
+/// BDApps-required price line in `disclosure_md` (https://appspro.dev/docs).
 class AppPricingInfo {
+  /// Base price, before VAT / SD / SC (AppsPro `price`).
   final String amount;
+
+  /// Price with VAT, SD and SC added (AppsPro `price_inclusive`), when AppsPro sent it.
+  final String? amountInclusive;
   final String currency;
+
+  /// AppsPro `billing_period`, e.g. `daily`.
   final String frequency;
   final List<String> supportedCarriers;
-  final String? vatSdText;
+
+  /// BDApps-required price disclosure (AppsPro `disclosure_md`), shown as plain text.
+  final String? disclosure;
+
+  /// True when the server could not reach AppsPro and sent its last known price.
+  final bool isFallback;
 
   const AppPricingInfo({
     required this.amount,
     required this.currency,
     required this.frequency,
     required this.supportedCarriers,
-    this.vatSdText,
+    this.amountInclusive,
+    this.disclosure,
+    this.isFallback = false,
   });
 
   factory AppPricingInfo.fromJson(Map<String, dynamic> json) {
-    final pricing = json['pricing'] as Map<String, dynamic>? ?? {};
-    final carriers = json['supported_carriers'] as List<dynamic>? ?? ['Robi', 'Airtel'];
-
+    final raw = json['pricing'];
+    Map<String, dynamic> method = const {};
+    if (raw is List && raw.isNotEmpty && raw.first is Map) {
+      method = (raw.first as Map).cast<String, dynamic>();
+    } else if (raw is Map) {
+      // Older server builds sent { amount, currency, frequency }.
+      final m = raw.cast<String, dynamic>();
+      method = {'price': m['amount'], 'billing_period': m['frequency']};
+    }
+    final disclosure = (json['disclosure_md'] as String?)?.replaceAll(RegExp(r'[*_`#]'), '').trim();
     return AppPricingInfo(
-      amount: pricing['amount']?.toString() ?? '2.00',
-      currency: pricing['currency']?.toString() ?? 'BDT',
-      frequency: pricing['frequency']?.toString() ?? 'daily',
-      supportedCarriers: carriers.map((e) => e.toString()).toList(),
-      vatSdText: '+ VAT, SD & SC applicable',
+      amount: _text(method['price']) ?? fallback.amount,
+      amountInclusive: _text(method['price_inclusive']),
+      currency: 'BDT',
+      frequency: _text(method['billing_period']) ?? fallback.frequency,
+      supportedCarriers: fallback.supportedCarriers,
+      disclosure: (disclosure == null || disclosure.isEmpty) ? null : disclosure,
+      isFallback: json['fallback'] == true,
     );
+  }
+
+  static String? _text(Object? v) {
+    final s = v?.toString().trim();
+    return (s == null || s.isEmpty || s == 'null') ? null : s;
+  }
+
+  /// "দিন" / "day" for the billing period.
+  String periodLabel(bool isBn) {
+    switch (frequency.toLowerCase()) {
+      case 'weekly':
+        return isBn ? 'সপ্তাহ' : 'week';
+      case 'monthly':
+        return isBn ? 'মাস' : 'month';
+      default:
+        return isBn ? 'দিন' : 'day';
+    }
+  }
+
+  /// The tax line under the price: the real total when AppsPro sent one.
+  String taxLine(bool isBn) {
+    final total = amountInclusive;
+    if (total != null) {
+      return isBn
+          ? 'ভ্যাট, এসডি ও এসসি সহ মোট ৳$total / ${periodLabel(true)}'
+          : 'Total with VAT, SD & SC: ৳$total / ${periodLabel(false)}';
+    }
+    return isBn ? '+ ভ্যাট, এসডি ও এসসি প্রযোজ্য' : '+ VAT, SD & SC applicable';
   }
 
   static const fallback = AppPricingInfo(
@@ -180,6 +234,6 @@ class AppPricingInfo {
     currency: 'BDT',
     frequency: 'daily',
     supportedCarriers: ['Robi', 'Airtel'],
-    vatSdText: '+ ১৫% ভ্যাট, ১৫% এসডি ও ১% এসসি প্রযোজ্য',
+    isFallback: true,
   );
 }

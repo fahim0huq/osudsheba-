@@ -30,7 +30,7 @@ const env = {
 };
 
 let failed = false;
-for (const suite of ['subscription.test.js', 'web_subscription.test.js', 'security.test.js', 'family.test.js', 'appspro_flow.test.js']) {
+for (const suite of ['subscription.test.js', 'web_subscription.test.js', 'security.test.js', 'family.test.js', 'appspro_flow.test.js', 'appspro_docs.test.js']) {
   try {
     execFileSync(process.execPath, [path.join(__dirname, suite)], { stdio: 'inherit', env });
   } catch {

@@ -177,6 +177,9 @@ class SubscriptionService {
       if (response.statusCode == 409 && data['error'] == 'SUBSCRIPTION_STILL_ACTIVE') {
         throw const SubscriptionStillActiveException();
       }
+      if (response.statusCode == 502 && data['error'] == 'BILLING_DATA_DELETE_FAILED') {
+        throw const BillingDataDeleteFailedException();
+      }
       throw Exception(data['message'] ?? 'Could not delete your account data (HTTP ${response.statusCode}).');
     } on SocketException {
       throw Exception('Cannot connect to the server. Check your connection.');
@@ -189,4 +192,10 @@ class SubscriptionService {
 /// The server refused to delete account data because the subscription is still active.
 class SubscriptionStillActiveException implements Exception {
   const SubscriptionStillActiveException();
+}
+
+/// AppsPro could not remove the phone number from its subscriber record, so the server
+/// deleted nothing. The user can try again later.
+class BillingDataDeleteFailedException implements Exception {
+  const BillingDataDeleteFailedException();
 }

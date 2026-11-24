@@ -115,16 +115,20 @@ const webStatusLimiter = rateLimit({
 router.get('/app-info', async (req, res) => {
   try {
     const appInfo = await AppsProService.getAppInfo();
+    // AppsPro's /sdk/app-info sends pricing as a list of methods
+    // ({ method_name, display_name, price, price_inclusive, billing_period }); this route
+    // keeps its older single-price shape for the website and adds the AppsPro fields.
+    const method = Array.isArray(appInfo.pricing) ? appInfo.pricing[0] : null;
     return res.status(200).json({
       success: true,
       name: appInfo.name || 'OsudSheba',
-      pricing: (Array.isArray(appInfo.pricing) && appInfo.pricing.length === 0)
-        ? { amount: '2.00', currency: 'BDT', frequency: 'daily' }
-        : (appInfo.pricing || {
-            amount: '2.00',
-            currency: 'BDT',
-            frequency: 'daily',
-          }),
+      pricing: {
+        amount: (method && method.price) || '2.00',
+        amount_inclusive: (method && method.price_inclusive) || null,
+        currency: 'BDT',
+        frequency: (method && method.billing_period) || 'daily',
+      },
+      disclosure_md: appInfo.disclosure_md || null,
       supported_carriers: ['Robi', 'Airtel'],
       carrier_billing_provider: 'AppsPro / BDApps',
     });

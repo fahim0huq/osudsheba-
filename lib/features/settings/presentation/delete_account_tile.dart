@@ -97,6 +97,9 @@ Future<void> _deleteAccount(BuildContext context, WidgetRef ref, String lang) as
   } on SubscriptionStillActiveException {
     error = _t(lang, 'সাবস্ক্রিপশন বাতিল করা যায়নি। কিছুক্ষণ পরে আবার চেষ্টা করুন।',
         'Your subscription could not be cancelled yet. Please try again in a few minutes.');
+  } on BillingDataDeleteFailedException {
+    error = _t(lang, 'বিল-প্রদানকারী (AppsPro) থেকে আপনার নম্বর মোছা যায়নি, তাই কিছুই মোছা হয়নি। কিছুক্ষণ পরে আবার চেষ্টা করুন।',
+        'Your number could not be removed from the billing provider (AppsPro), so nothing was deleted. Please try again later.');
   } catch (e) {
     error = e.toString().replaceFirst('Exception: ', '');
   }

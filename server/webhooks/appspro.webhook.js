@@ -92,7 +92,9 @@ async function handleAppsProWebhook(req, res) {
       });
     }
 
-    const payloadToSign = `${timestamp}.${rawBody.toString('utf8')}`;
+    // AppsPro signs "<X-Timestamp>." followed by the exact raw bytes, so the bytes are
+    // concatenated as-is (never decoded and re-encoded).
+    const payloadToSign = Buffer.concat([Buffer.from(`${timestamp}.`, 'utf8'), rawBody]);
     const calculatedHmac = crypto.createHmac('sha256', signingSecret).update(payloadToSign).digest('hex');
 
     if (!timingSafeCompare(calculatedHmac, signature)) {
@@ -148,7 +150,17 @@ async function handleAppsProWebhook(req, res) {
     });
 
     // 7. Process Lifecycle & Inbound Events
-    await processEvent(effectiveEventType, payload);
+    try {
+      await processEvent(effectiveEventType, payload);
+    } catch (procErr) {
+      // Recorded as failed (not processed), so AppsPro's retry of this same X-Event-Id is
+      // processed again instead of being skipped as a duplicate.
+      await SubscriptionService.recordWebhookEvent(effectiveEventId, {
+        eventType: effectiveEventType,
+        processingStatus: 'failed',
+      });
+      throw procErr;
+    }
 
     // Mark event as processed
     await SubscriptionService.recordWebhookEvent(effectiveEventId, {
@@ -240,13 +252,14 @@ async function processEvent(eventType, payload) {
     }
 
     case 'sms.received': {
-      console.log(`[Webhook] Inbound SMS received from ${maskPhone(phone || payload.source_address)}`);
+      // data is the raw BDApps MO payload: { applicationId, sourceAddress: "tel:880...", message, ... }
+      console.log(`[Webhook] Inbound SMS received from ${maskPhone(data.sourceAddress || phone)}`);
       // Ingestion path preserved; clean boundary for future SMS logic
       break;
     }
 
     case 'ussd.received': {
-      console.log(`[Webhook] Inbound USSD received from subscriber ${subscriberId || maskPhone(phone)}`);
+      console.log(`[Webhook] Inbound USSD received from ${maskPhone(data.sourceAddress || phone)}`);
       // Ingestion path preserved; clean boundary for future USSD logic
       break;
     }

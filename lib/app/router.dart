@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../core/services/scan/prescription_text_parser.dart';
+import '../core/utils/access_mode.dart';
 import '../features/prescription/presentation/photo_entry_screen.dart';
 import '../core/constants/app_features.dart';
 import '../core/models/mock_models.dart';
@@ -93,12 +94,13 @@ final GoRouter appRouter = GoRouter(
         return '/login';
       }
 
-      // 2. Must hold active or pending subscription entitlement
-      if (!isEntitled) {
-        return '/subscription';
-      }
-
-      return null;
+      // 2. Without a subscription: a user who has medicines keeps reminders and the free
+      //    screens; premium screens (and brand-new users) go to the subscribe screen.
+      return lapsedRedirect(
+        location: matched,
+        entitled: isEntitled,
+        hasMedicines: container.read(medicinesProvider).isNotEmpty,
+      );
     } catch (_) {
       return null;
     }

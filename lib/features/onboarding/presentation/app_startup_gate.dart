@@ -72,9 +72,12 @@ class _AppStartupGateState extends ConsumerState<AppStartupGate> {
 
     // 2. Post-Login Subscription Gate (PREMIUM-ONLY)
     // Every authenticated user must have an active or pending subscription before reaching the app.
+    // A user who already has medicines keeps their reminders without a subscription (a
+    // failed ৳2 charge must never cost a patient their medicine list); only a brand-new user
+    // starts at the subscribe screen.
     final subAsync = ref.read(subscriptionProvider);
     final isEntitled = subAsync.value?.isEntitled ?? false;
-    if (!isEntitled) {
+    if (!isEntitled && ref.read(medicinesProvider).isEmpty) {
       context.go('/subscription');
       return;
     }

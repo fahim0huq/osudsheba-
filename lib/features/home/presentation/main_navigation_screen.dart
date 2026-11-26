@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/constants/app_colors.dart';
+import '../../../core/providers/subscription_provider.dart';
 import '../../../core/services/mock_data_service.dart';
+import '../../../core/utils/access_mode.dart';
 import 'home_screen.dart';
 import '../../medicines/presentation/add_medicine_screen.dart';
 import '../../prescription/presentation/upload_prescription_screen.dart';
@@ -26,6 +28,13 @@ class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
   int get _currentIndex => widget.navigationShell?.currentIndex ?? _localIndex;
 
   void _onTabTapped(int index) {
+    // Add, Scan and Family need a subscription: without one, open the subscribe screen on
+    // top (back returns here) instead of switching to a tab that would redirect away.
+    final sub = ref.read(subscriptionProvider).valueOrNull;
+    if (kPremiumTabs.contains(index) && !(sub?.isEntitled ?? false) && widget.navigationShell != null) {
+      context.push('/subscription');
+      return;
+    }
     final shell = widget.navigationShell;
     if (shell != null) {
       // Same tab again: back to that tab's first screen. Otherwise just swap tabs.

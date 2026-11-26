@@ -13,6 +13,7 @@ import 'dose_recorder.dart';
 import 'widgets/next_dose_card.dart';
 import 'widgets/next_dose_visuals.dart';
 import 'widgets/progress_ring_card.dart';
+import 'widgets/renew_banner.dart';
 
 /// Home: today's progress ring, the animated next-dose card and one button that opens
 /// Today's medicines (where medicines are listed, added, changed, paused or deleted).
@@ -89,6 +90,7 @@ class HomeScreen extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const NudgeBanner(), // reminders sent by family
+            const RenewBanner(), // subscription off: reminders still work
             if (medicines.isEmpty)
               EmptyState(
                 title: bn ? 'ওষুধের তালিকা খালি' : 'No Medicines Scheduled',

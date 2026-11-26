@@ -385,6 +385,15 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
         foregroundColor: AppColors.textPrimary,
         elevation: 0,
         centerTitle: true,
+        // Opened without a way back (e.g. a premium screen redirected here): a user who has
+        // medicines can always return to them; only a new user has to subscribe first.
+        leading: !context.canPop() && ref.watch(medicinesProvider).isNotEmpty
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back_rounded),
+                tooltip: isBn ? 'আমার ওষুধে ফিরুন' : 'Back to my medicines',
+                onPressed: () => context.go('/home'),
+              )
+            : null,
         actions: [
           IconButton(
             icon: const Icon(Icons.logout_rounded, color: AppColors.textSecondary),

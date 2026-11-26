@@ -138,7 +138,7 @@ async function run() {
   });
 
   await test('status re-checks an old active plan and removes premium when the operator says UNREGISTERED', async () => {
-    const old = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const old = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString(); // past the 6-hour re-check
     store = { u1: { uid: 'u1', phone: '01812345678', status: 'active', entitlementActive: true, lastVerifiedAt: old } };
     AppsProService.getLiveStatusByPhone = async () => ({ subscription_status: 'UNREGISTERED', status_code: 'S1000' });
     const r = await call(SubscriptionController.getStatus);
@@ -147,7 +147,7 @@ async function run() {
   });
 
   await test('...keeps premium when the operator still says REGISTERED, or when AppsPro is unreachable', async () => {
-    const old = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const old = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString(); // past the 6-hour re-check
     store = { u1: { uid: 'u1', phone: '01812345678', status: 'active', entitlementActive: true, lastVerifiedAt: old } };
     AppsProService.getLiveStatusByPhone = async () => ({ subscription_status: 'REGISTERED' });
     eq((await call(SubscriptionController.getStatus)).body.valid, true, 'registered');
@@ -156,8 +156,9 @@ async function run() {
     eq((await call(SubscriptionController.getStatus)).body.valid, true, 'outage');
   });
 
-  await test('...and does not call AppsPro again within 15 minutes', async () => {
-    store = { u1: { uid: 'u1', phone: '01812345678', status: 'active', entitlementActive: true, lastVerifiedAt: new Date().toISOString() } };
+  await test('...and does not call AppsPro again within 6 hours', async () => {
+    const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
+    store = { u1: { uid: 'u1', phone: '01812345678', status: 'active', entitlementActive: true, lastVerifiedAt: fiveHoursAgo } };
     let calls = 0;
     AppsProService.getLiveStatusByPhone = async () => { calls++; return { subscription_status: 'UNREGISTERED' }; };
     await call(SubscriptionController.getStatus);

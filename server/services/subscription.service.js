@@ -47,6 +47,13 @@ try {
   useLocalFallback = true;
 }
 
+if (useLocalFallback) {
+  require('./production_guard').assertLiveConfig(
+    'No Firestore credentials, so subscriptions would be kept in a JSON file that Render wipes on every restart.',
+    'Set GOOGLE_APPLICATION_CREDENTIALS to the Firebase service-account file (a Render secret file).',
+  );
+}
+
 // Local file store setup for dev/sandbox fallback
 const DATA_DIR = process.env.SUBSCRIPTION_DATA_DIR
   ? path.resolve(process.env.SUBSCRIPTION_DATA_DIR)

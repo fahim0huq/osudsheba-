@@ -67,7 +67,12 @@ function unsubscribeConfirmed(result) {
  * phone decides; without a phone, AppsPro's own record by subscriber id. If AppsPro cannot
  * be reached the plan is kept, so paying users are not locked out by an outage.
  */
-const RECHECK_MS = 15 * 60 * 1000;
+// Every 6 hours by default (SUBSCRIPTION_RECHECK_MINUTES changes it). AppsPro's webhooks
+// already report most changes; this is the backup, and with many users a short interval
+// would mean an AppsPro call on almost every app launch.
+const RECHECK_MS = (Number(process.env.SUBSCRIPTION_RECHECK_MINUTES) > 0
+  ? Number(process.env.SUBSCRIPTION_RECHECK_MINUTES)
+  : 6 * 60) * 60 * 1000;
 // A pending plan (OTP done, operator still charging) is checked far more often, so premium
 // unlocks within seconds of the operator's charge instead of never.
 const PENDING_RECHECK_MS = 15 * 1000;

@@ -21,6 +21,12 @@ const { createFamilyRouter } = require('./routes/family.routes');
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Render puts a proxy in front of the server: trust it, so req.ip is the caller's address
+// rather than the proxy's (TRUST_PROXY_HOPS changes how many proxies are trusted).
+app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS) >= 0 && process.env.TRUST_PROXY_HOPS !== undefined
+  ? Number(process.env.TRUST_PROXY_HOPS)
+  : 1);
+
 // Enable CORS with origin restrictions in production
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
   ? process.env.ALLOWED_ORIGINS.split(',') 

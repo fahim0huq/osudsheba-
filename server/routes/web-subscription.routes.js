@@ -15,7 +15,14 @@ const { normalizeBangladeshPhone } = require('../controllers/subscription.contro
 const router = express.Router();
 
 // Signing secret for web download tokens
+// (The built-in value is for local development only; the live server refuses to use it.)
 const TOKEN_SECRET = process.env.APPSPRO_SECRET_KEY || process.env.DOWNLOAD_TOKEN_SECRET || 'osudsheba_web_secure_token_secret_key_2026';
+if (!process.env.APPSPRO_SECRET_KEY && !process.env.DOWNLOAD_TOKEN_SECRET) {
+  require('../services/production_guard').assertLiveConfig(
+    'No APPSPRO_SECRET_KEY or DOWNLOAD_TOKEN_SECRET, so download tokens would be signed with a key written in the code.',
+    'Set APPSPRO_SECRET_KEY (or DOWNLOAD_TOKEN_SECRET) in the Render environment.',
+  );
+}
 
 /**
  * Validate Bangladesh Robi and Airtel mobile operators
@@ -66,10 +73,28 @@ function verifyDownloadToken(token) {
   }
 }
 
-// 1. Rate limiter for OTP requests: max 5 requests per 10 minutes per IP
+// Website requests reach this server from the website's own servers (Vercel), so every
+// visitor shares the same few IP addresses. Counting per IP would make one small limit
+// shared by all visitors together. Count per phone number / OTP reference / download
+// token instead (that is also what stops SMS spam and OTP guessing), and fall back to IP.
+function webLimitKey(...fields) {
+  return (req) => {
+    const body = req.body || {};
+    for (const field of fields) {
+      const raw = body[field];
+      if (typeof raw !== 'string' || !raw.trim()) continue;
+      const value = field === 'phone' ? normalizeBangladeshPhone(raw) || raw.trim() : raw.trim();
+      return `${field}:${value.slice(0, 200)}`;
+    }
+    return `ip:${req.ip}`;
+  };
+}
+
+// 1. Rate limiter for OTP requests: max 5 requests per 10 minutes per phone number
 const webOtpRequestLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   max: 5,
+  keyGenerator: webLimitKey('phone'),
   validate: false,
   message: {
     success: false,
@@ -80,10 +105,11 @@ const webOtpRequestLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// 2. Rate limiter for OTP verification: max 10 verification attempts per 10 minutes
+// 2. Rate limiter for OTP verification: max 10 attempts per 10 minutes per OTP request
 const webOtpVerifyLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   max: 10,
+  keyGenerator: webLimitKey('referenceNo', 'reference_no', 'phone'),
   validate: false,
   message: {
     success: false,
@@ -94,10 +120,11 @@ const webOtpVerifyLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// 3. Rate limiter for status queries: max 30 per 10 minutes
+// 3. Rate limiter for status queries: max 30 per 10 minutes per visitor
 const webStatusLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   max: 30,
+  keyGenerator: webLimitKey('downloadToken', 'phone'),
   validate: false,
   message: {
     success: false,

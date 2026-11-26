@@ -61,7 +61,11 @@ if (useLocalFallback) {
  * is retried (the app asks again, AppsPro re-sends webhooks).
  */
 function fallBackOrThrow(err) {
-  if (require('./production_guard').isLiveServer()) throw err;
+  if (require('./production_guard').isLiveServer()) {
+    console.warn('[SubscriptionService] Live server: this request fails and will be retried; nothing is written to the local file.');
+    throw err;
+  }
+  console.warn('[SubscriptionService] Local run: using the local JSON store from now on.');
   useLocalFallback = true;
 }
 
@@ -156,7 +160,7 @@ class SubscriptionService {
           record = docSnap.data();
         }
       } catch (err) {
-        console.warn(`[SubscriptionService] Firestore read failed (${err.message}), falling back to local store.`);
+        console.warn(`[SubscriptionService] Firestore read failed (${err.message}).`);
         fallBackOrThrow(err);
       }
     }
@@ -200,7 +204,7 @@ class SubscriptionService {
           record = snapshot.docs[0].data();
         }
       } catch (err) {
-        console.warn(`[SubscriptionService] Firestore phone query failed (${err.message}), trying local fallback.`);
+        console.warn(`[SubscriptionService] Firestore phone query failed (${err.message}).`);
         fallBackOrThrow(err);
       }
     }
@@ -245,7 +249,7 @@ class SubscriptionService {
           }
         }
       } catch (err) {
-        console.warn(`[SubscriptionService] Firestore query failed (${err.message}), trying local fallback.`);
+        console.warn(`[SubscriptionService] Firestore query failed (${err.message}).`);
         fallBackOrThrow(err);
       }
     }
@@ -306,7 +310,7 @@ class SubscriptionService {
         const docRef = firestoreDb.collection('subscriptions').doc(uid);
         await docRef.set(subscriptionRecord, { merge: true });
       } catch (err) {
-        console.warn(`[SubscriptionService] Firestore save failed (${err.message}), saving to local store.`);
+        console.warn(`[SubscriptionService] Firestore save failed (${err.message}).`);
         fallBackOrThrow(err);
       }
     }

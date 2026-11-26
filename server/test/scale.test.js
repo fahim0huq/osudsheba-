@@ -73,6 +73,18 @@ async function run() {
     'website routes refuse production without a token secret',
   );
 
+  // A Firestore failure while running: the live server fails the request instead of quietly
+  // switching to the JSON file (which Render wipes); local runs still fall back.
+  const probe = `require(${JSON.stringify(service)}).SubscriptionService.findSubscriptionByPhone('01800000000')`
+    + `.then(() => process.exit(0), () => process.exit(3))`;
+  const firestoreDown = (extraEnv) => spawnSync(process.execPath, ['-e', probe], {
+    env: { ...process.env, GOOGLE_APPLICATION_CREDENTIALS: path.join(__dirname, 'no-such-key.json'), APPSPRO_SECRET_KEY: 'x', ...extraEnv },
+    encoding: 'utf8',
+    timeout: 60000,
+  }).status;
+  check(firestoreDown({ RENDER: 'true' }) === 3, 'live server: a Firestore failure fails the request, no switch to the JSON file');
+  check(firestoreDown({ NODE_ENV: 'development' }) === 0, 'local: a Firestore failure still falls back to the JSON file');
+
   // Website OTP limit: per phone number, so one busy number does not block everyone else.
   const { webSubscriptionRouter } = require('../routes/web-subscription.routes');
   const app = express();

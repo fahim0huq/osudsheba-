@@ -54,6 +54,17 @@ if (useLocalFallback) {
   );
 }
 
+/**
+ * A Firestore call failed while running. Locally: switch to the JSON store, as before. On the
+ * live server: fail this request instead, never switch. The JSON file there is wiped on every
+ * restart, so a switch would quietly lose every subscription saved after it; a failed request
+ * is retried (the app asks again, AppsPro re-sends webhooks).
+ */
+function fallBackOrThrow(err) {
+  if (require('./production_guard').isLiveServer()) throw err;
+  useLocalFallback = true;
+}
+
 // Local file store setup for dev/sandbox fallback
 const DATA_DIR = process.env.SUBSCRIPTION_DATA_DIR
   ? path.resolve(process.env.SUBSCRIPTION_DATA_DIR)
@@ -146,7 +157,7 @@ class SubscriptionService {
         }
       } catch (err) {
         console.warn(`[SubscriptionService] Firestore read failed (${err.message}), falling back to local store.`);
-        useLocalFallback = true;
+        fallBackOrThrow(err);
       }
     }
 
@@ -190,7 +201,7 @@ class SubscriptionService {
         }
       } catch (err) {
         console.warn(`[SubscriptionService] Firestore phone query failed (${err.message}), trying local fallback.`);
-        useLocalFallback = true;
+        fallBackOrThrow(err);
       }
     }
 
@@ -235,7 +246,7 @@ class SubscriptionService {
         }
       } catch (err) {
         console.warn(`[SubscriptionService] Firestore query failed (${err.message}), trying local fallback.`);
-        useLocalFallback = true;
+        fallBackOrThrow(err);
       }
     }
 
@@ -296,7 +307,7 @@ class SubscriptionService {
         await docRef.set(subscriptionRecord, { merge: true });
       } catch (err) {
         console.warn(`[SubscriptionService] Firestore save failed (${err.message}), saving to local store.`);
-        useLocalFallback = true;
+        fallBackOrThrow(err);
       }
     }
 
@@ -356,7 +367,7 @@ class SubscriptionService {
         }
       } catch (err) {
         console.warn(`[SubscriptionService] Firestore webhook event check failed:`, err.message);
-        useLocalFallback = true;
+        fallBackOrThrow(err);
       }
     }
 
@@ -389,7 +400,7 @@ class SubscriptionService {
         await firestoreDb.collection('appspro_webhook_events').doc(eventId).set(record, { merge: true });
       } catch (err) {
         console.warn(`[SubscriptionService] Firestore recordWebhookEvent failed:`, err.message);
-        useLocalFallback = true;
+        fallBackOrThrow(err);
       }
     }
 

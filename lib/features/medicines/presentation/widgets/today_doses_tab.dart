@@ -6,6 +6,7 @@ import '../../../../core/services/mock_data_service.dart';
 import '../../../../core/utils/dose_text.dart';
 import '../../../../core/utils/home_schedule.dart';
 import '../../../../core/utils/time_label.dart';
+import '../../../../core/utils/dose_slots.dart';
 import '../../../home/presentation/dose_recorder.dart';
 import 'medicine_actions_sheet.dart';
 
@@ -17,6 +18,7 @@ class TodayDosesTab extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final lang = ref.watch(appSettingsProvider).language;
+    final slotTimes = ref.watch(appSettingsProvider.select((s) => s.slotTimes));
     final bn = lang == 'bn';
     final now = ref.watch(minuteClockProvider).valueOrNull ?? DateTime.now();
     final doses = todayDoses(medicines: ref.watch(medicinesProvider), logs: ref.watch(doseLogsProvider), now: now);
@@ -42,7 +44,8 @@ class TodayDosesTab extends ConsumerWidget {
       children: [
         for (final entry in groups.entries) ...[
           _GroupHeader(
-            time: displayTime(entry.value.first.time, lang),
+            // Meal-time slots are named ("Morning · after meal"); custom times show the time only.
+            title: _groupTitle(entry.value, slotTimes, lang),
             chip: entry.value.every((d) => d.state == DoseState.taken)
                 ? (bn ? '✓ সব খাওয়া হয়েছে' : '✓ All taken')
                 : entry.key <= nowMinute && entry.value.any((d) => open.contains(d.state))
@@ -71,11 +74,18 @@ class TodayDosesTab extends ConsumerWidget {
   }
 }
 
+String _groupTitle(List<TodayDose> doses, Map<String, String> slotTimes, String lang) {
+  final time = displayTime(doses.first.time, lang);
+  final slot = slotAtTime(doses.first.time, slotTimes);
+  final usesSlot = slot != null && doses.any((d) => d.medicine.slots.contains(slot.key));
+  return usesSlot ? '${slot.label(lang == 'bn')} · $time' : time;
+}
+
 class _GroupHeader extends StatelessWidget {
-  final String time;
+  final String title;
   final String? chip;
   final Color chipColor;
-  const _GroupHeader({required this.time, required this.chip, required this.chipColor});
+  const _GroupHeader({required this.title, required this.chip, required this.chipColor});
 
   @override
   Widget build(BuildContext context) {
@@ -84,8 +94,11 @@ class _GroupHeader extends StatelessWidget {
       child: Row(children: [
         const Icon(Icons.schedule_rounded, size: 20, color: AppColors.textSecondary),
         const SizedBox(width: 6),
-        Text(time, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: AppColors.textSecondary)),
-        const Spacer(),
+        Expanded(
+          child: Text(title,
+              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: AppColors.textSecondary)),
+        ),
+        const SizedBox(width: 6),
         if (chip != null)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),

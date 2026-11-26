@@ -54,3 +54,6 @@ server/node_modules/
 # Firebase configuration with API keys
 lib/firebase_options.dart
 android/app/google-services.json
+
+# Server local-fallback data (subscriptions, webhook events): written at runtime, may hold phone numbers
+server/data/*.json

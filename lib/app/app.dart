@@ -63,12 +63,19 @@ class _OsudShebaAppState extends ConsumerState<OsudShebaApp> with WidgetsBinding
     });
 
     // Handle cold start launch payload if app was opened directly from alarm/notification
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       final initialPayload = NotificationService.instance.launchPayload;
       if (initialPayload != null) {
         _handlePayloadNavigation(initialPayload);
         NotificationService.instance.launchPayload = null;
+        return;
       }
+      // An alarm can also reach the app's existing screen while the app process is still
+      // restarting (Android delivers it "to top"); it is kept on the Android side until now.
+      try {
+        final pending = await _alarmChannel.invokeMethod<String>('takePendingAlarm');
+        if (pending != null) _handlePayloadNavigation(pending);
+      } catch (_) {}
     });
   }
 
@@ -88,6 +95,8 @@ class _OsudShebaAppState extends ConsumerState<OsudShebaApp> with WidgetsBinding
       final data = jsonDecode(payload) as Map<String, dynamic>;
       final String medicineId = data['medicineId'] as String? ?? '';
       if (data['type'] == 'refill') {
+        // Only dose alarms may appear over the lock screen; this opens normally.
+        _alarmChannel.invokeMethod('clearLockScreen').catchError((_) {});
         // Low-stock reminder: open the buying guide (over Home, so Back lands there), not
         // the dose alarm.
         appRouter.go('/home');
@@ -96,6 +105,19 @@ class _OsudShebaAppState extends ConsumerState<OsudShebaApp> with WidgetsBinding
       }
       final String scheduledTime = data['scheduledTime'] as String? ?? '';
       final bool isTest = data['isTest'] == true;
+      // One alarm screen at a time (the full-screen alarm and the in-app check can both fire
+      // in the same minute). Marked open now, before it is built, so the start-up screen
+      // cannot navigate over it.
+      final alarm = NotificationService.instance.alarmScreenOpen;
+      if (alarm.value) {
+        dev.log('Alarm screen already open; not opening another for $scheduledTime');
+        return;
+      }
+      alarm.value = true;
+      // Safety: if the alarm screen never appears, do not leave start-up waiting for it.
+      Future.delayed(const Duration(seconds: 5), () {
+        if (NotificationService.instance.alarmScreensMounted <= 0) alarm.value = false;
+      });
       appRouter.push(
         '/reminder-alert?medicineId=$medicineId'
         '&scheduledTime=${Uri.encodeComponent(normalizeTimeString(scheduledTime) ?? scheduledTime)}'
@@ -167,6 +189,13 @@ class _OsudShebaAppState extends ConsumerState<OsudShebaApp> with WidgetsBinding
     ref.listen<bool>(appSettingsProvider.select((s) => s.fullScreenAlarms), (previous, next) {
       if (ref.read(userUidProvider) == null) return;
       NotificationService.instance.rescheduleAll(ref.read(medicinesProvider), logs: ref.read(doseLogsProvider));
+    });
+
+    // A meal-time slot moved in Reminder settings: medicines in it follow (and their alarms
+    // are rebuilt by the medicines listener above).
+    ref.listen<Map<String, String>>(appSettingsProvider.select((s) => s.slotTimes), (previous, next) {
+      if (ref.read(userUidProvider) == null) return;
+      ref.read(medicinesProvider.notifier).applySlotTimes(next);
     });
 
     final textScale = ref.watch(appSettingsProvider.select((s) => s.textScale));

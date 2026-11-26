@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/models/mock_models.dart';
 import '../../../../core/services/scan/prescription_text_parser.dart';
+import '../../../../core/utils/dose_slots.dart';
 
 String scanIssueText(ScanIssue issue, bool bn) {
   switch (issue) {
@@ -35,7 +36,7 @@ class ScanDraftCard extends StatelessWidget {
     final meal = m.mealRelation == 'None' ? null : (bn ? _mealBn[m.mealRelation] : m.mealRelation);
     final details = [
       m.dose,
-      ?meal,
+      if (m.slots.isEmpty && meal != null) meal,
       days == null ? (bn ? 'চলবে' : 'ongoing') : (bn ? '$days দিন' : '$days days'),
     ].join(' • ');
     final warn = draft.needsCheck;
@@ -74,7 +75,7 @@ class ScanDraftCard extends StatelessWidget {
                   ),
                 Text(details, style: small.copyWith(fontWeight: FontWeight.w600)),
                 Text(
-                  m.times.join(', '),
+                  m.slots.isEmpty ? m.times.join(', ') : slotsFromKeys(m.slots).map((s) => s.label(bn)).join(', '),
                   style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5, color: AppColors.primaryDark),
                 ),
                 if (draft.readAs != null)

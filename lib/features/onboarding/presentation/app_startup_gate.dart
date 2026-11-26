@@ -23,13 +23,26 @@ class _AppStartupGateState extends ConsumerState<AppStartupGate> {
   @override
   void initState() {
     super.initState();
+    NotificationService.instance.alarmScreenOpen.addListener(_onAlarmChanged);
+  }
+
+  @override
+  void dispose() {
+    NotificationService.instance.alarmScreenOpen.removeListener(_onAlarmChanged);
+    super.dispose();
+  }
+
+  /// The alarm screen closed: rebuild, so start-up routing (Home, sign-in...) runs now.
+  void _onAlarmChanged() {
+    if (mounted && !_hasNavigated && !NotificationService.instance.alarmScreenOpen.value) setState(() {});
   }
 
   void _evaluateRoute(AuthUser? authUser) {
     if (!mounted || _hasNavigated) return;
 
-    // Do not navigate away if an alarm is actively launching or shown
-    if (NotificationService.instance.launchPayload != null) {
+    // Do not navigate away while an alarm is launching or shown: that replaced the alarm a
+    // moment after it opened over the lock screen. Routing runs once it closes.
+    if (NotificationService.instance.launchPayload != null || NotificationService.instance.alarmScreenOpen.value) {
       return;
     }
     _hasNavigated = true;

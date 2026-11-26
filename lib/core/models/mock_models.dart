@@ -125,6 +125,11 @@ class Medicine {
   final double? stockCount;
   final DateTime? stockSetAt;
 
+  /// Meal-time slots ("morning_after", "night_after"... see dose_slots.dart). When set, [times]
+  /// are those slots' clock times from Reminder settings, so medicines in the same slot share
+  /// one reminder. Empty = custom times (exact times chosen for this medicine).
+  final List<String> slots;
+
   Medicine({
     required this.id,
     required this.name,
@@ -141,6 +146,7 @@ class Medicine {
     this.photoPath,
     this.stockCount,
     this.stockSetAt,
+    this.slots = const [],
   });
 
   Medicine copyWith({
@@ -159,6 +165,7 @@ class Medicine {
     String? photoPath,
     double? stockCount,
     DateTime? stockSetAt,
+    List<String>? slots,
     bool clearEndDate = false,
     bool clearPhoto = false,
     bool clearStock = false,
@@ -179,6 +186,7 @@ class Medicine {
       photoPath: clearPhoto ? null : (photoPath ?? this.photoPath),
       stockCount: clearStock ? null : (stockCount ?? this.stockCount),
       stockSetAt: clearStock ? null : (stockSetAt ?? this.stockSetAt),
+      slots: slots ?? this.slots,
     );
   }
 
@@ -199,6 +207,7 @@ class Medicine {
       if (photoPath != null) 'photoPath': photoPath,
       if (stockCount != null) 'stockCount': stockCount,
       if (stockSetAt != null) 'stockSetAt': stockSetAt!.toIso8601String(),
+      if (slots.isNotEmpty) 'slots': slots,
     };
   }
 
@@ -222,6 +231,7 @@ class Medicine {
       photoPath: json['photoPath'] as String?,
       stockCount: (json['stockCount'] as num?)?.toDouble(),
       stockSetAt: json['stockSetAt'] != null ? DateTime.tryParse(json['stockSetAt'] as String) : null,
+      slots: List<String>.from(json['slots'] ?? const []),
     );
   }
 }
@@ -376,6 +386,10 @@ class AppSettings {
   /// Remind to buy a medicine this many days before its stock runs out.
   final int refillAlertDays;
 
+  /// Clock times of the six meal-time slots, by slot key (see dose_slots.dart). Missing
+  /// entries use the defaults (morning 7:30 / 8:30 AM, noon 1 / 2 PM, night 8:30 / 9:30 PM).
+  final Map<String, String> slotTimes;
+
   // Backwards compatibility getters:
   String get language => languageCode;
   bool get appNotifications => appNotificationsEnabled;
@@ -391,6 +405,7 @@ class AppSettings {
     this.cloudBackupEnabled = false,
     this.fullScreenAlarms = true,
     this.refillAlertDays = 5,
+    this.slotTimes = const {},
   });
 
   AppSettings copyWith({
@@ -406,6 +421,7 @@ class AppSettings {
     bool? cloudBackupEnabled,
     bool? fullScreenAlarms,
     int? refillAlertDays,
+    Map<String, String>? slotTimes,
   }) {
     return AppSettings(
       languageCode: languageCode ?? language ?? this.languageCode,
@@ -417,6 +433,7 @@ class AppSettings {
       cloudBackupEnabled: cloudBackupEnabled ?? this.cloudBackupEnabled,
       fullScreenAlarms: fullScreenAlarms ?? this.fullScreenAlarms,
       refillAlertDays: refillAlertDays ?? this.refillAlertDays,
+      slotTimes: slotTimes ?? this.slotTimes,
     );
   }
 
@@ -431,6 +448,7 @@ class AppSettings {
       'cloudBackupEnabled': cloudBackupEnabled,
       'fullScreenAlarms': fullScreenAlarms,
       'refillAlertDays': refillAlertDays,
+      'slotTimes': slotTimes,
     };
   }
 
@@ -445,6 +463,7 @@ class AppSettings {
       cloudBackupEnabled: json['cloudBackupEnabled'] as bool? ?? false,
       fullScreenAlarms: json['fullScreenAlarms'] as bool? ?? true,
       refillAlertDays: ((json['refillAlertDays'] as num?)?.toInt() ?? 5).clamp(1, 14),
+      slotTimes: (json['slotTimes'] as Map?)?.map((k, v) => MapEntry(k.toString(), v.toString())) ?? const {},
     );
   }
 }

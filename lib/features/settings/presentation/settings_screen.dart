@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -155,6 +154,15 @@ class SettingsScreen extends ConsumerWidget {
               ),
             ),
             FadeSlideIn(
+              delay: const Duration(milliseconds: 175),
+              child: _buildSettingTile(
+                context,
+                icon: Icons.analytics_rounded,
+                title: lang == 'bn' ? 'রিপোর্ট' : 'Report',
+                onTap: () => context.push('/adherence'),
+              ),
+            ),
+            FadeSlideIn(
               delay: const Duration(milliseconds: 200),
               child: _buildTextSizeSelector(context, ref, lang, settings.textScale),
             ),
@@ -176,7 +184,7 @@ class SettingsScreen extends ConsumerWidget {
               child: _buildSettingTile(
                 context,
                 icon: Icons.people_rounded,
-                title: lang == 'bn' ? 'তত্ত্বাবধায়ক/পারিবারিক এক্সেস' : 'Family/Caregiver Access',
+                title: lang == 'bn' ? 'পরিবার' : 'Family',
                 onTap: () => context.go('/caregiver'),
               ),
             ),
@@ -305,36 +313,6 @@ class SettingsScreen extends ConsumerWidget {
               delay: Duration(milliseconds: 475),
               child: DeleteAccountTile(),
             ),
-            if (kDebugMode) ...[
-              const SizedBox(height: 12.0),
-              FadeSlideIn(
-                delay: const Duration(milliseconds: 500),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.06),
-                    borderRadius: BorderRadius.circular(16.0),
-                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.2), width: 1.0),
-                  ),
-                  child: ListTile(
-                    leading: const Icon(Icons.bug_report_rounded, color: AppColors.primary),
-                    title: Text(
-                      lang == 'bn' ? 'টেস্ট নোটিফিকেশন (৩০ সেকেন্ড)' : 'Test Notification (30s)',
-                      style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, fontSize: 15.0),
-                    ),
-                    onTap: () async {
-                      await NotificationService.instance.scheduleTestNotification();
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(lang == 'bn' ? 'টেস্ট নোটিফিকেশন শিডিউল করা হয়েছে (৩০ সেকেন্ড)' : 'Test notification scheduled in 30 seconds!'),
-                          backgroundColor: AppColors.success,
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ),
-            ],
           ],
         ),
       ),

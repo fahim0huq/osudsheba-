@@ -12,6 +12,7 @@ import '../../../core/services/tts_service.dart';
 import '../../../core/utils/schedule_utils.dart';
 import '../../../core/utils/time_label.dart';
 import '../../../core/utils/time_utils.dart';
+import '../../../core/utils/dose_slots.dart';
 import 'widgets/alarm_empty_view.dart';
 import 'widgets/alarm_controls.dart';
 import 'widgets/alarm_medicine_page.dart';
@@ -53,6 +54,8 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen> {
   @override
   void initState() {
     super.initState();
+    NotificationService.instance.alarmScreenOpen.value = true;
+    NotificationService.instance.alarmScreensMounted++;
     _speaking = TtsService.instance.isPlaying;
     _tts = TtsService.instance.stateStream.listen((s) {
       if (mounted) setState(() => _speaking = s == TtsState.playing);
@@ -80,6 +83,12 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen> {
     _pages.dispose();
     TtsService.instance.stop();
     _lockScreen.invokeMethod('clearLockScreen').catchError((_) {}); // back behind the lock screen
+    // After this frame: the start-up screen may then finish (it waited for the alarm).
+    final ns = NotificationService.instance;
+    ns.alarmScreensMounted--;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (ns.alarmScreensMounted <= 0) ns.alarmScreenOpen.value = false;
+    });
     super.dispose();
   }
 
@@ -238,9 +247,12 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen> {
                         style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w800),
                       ),
                       Text(
-                        count > 1
-                            ? (bn ? '${localDigits(count, lang)}টি ওষুধ খাওয়ার সময়' : 'Time for $count medicines')
-                            : (bn ? 'ওষুধ খাওয়ার সময়' : 'Time for your medicine'),
+                        [
+                          ?_slotLabel(bn),
+                          count > 1
+                              ? (bn ? '${localDigits(count, lang)}টি ওষুধ' : '$count medicines')
+                              : (bn ? 'ওষুধ খাওয়ার সময়' : 'Time for your medicine'),
+                        ].join(' · '),
                         style: const TextStyle(color: Color(0xFFD1FAE5), fontSize: 18, fontWeight: FontWeight.w600),
                       ),
                     ],
@@ -268,14 +280,23 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen> {
             ),
           ),
           if (count > 1)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                bn
-                    ? '${localDigits(_page + 1, lang)} / ${localDigits(count, lang)} · সরিয়ে পরের ওষুধ দেখুন'
-                    : '${_page + 1} of $count · swipe for the next medicine',
-                style: const TextStyle(color: Color(0xFFCBD5E1), fontSize: 15),
-              ),
+            // ‹ 1 / 3 ›: tap the arrows or swipe to go through the medicines one by one.
+            Row(
+              children: [
+                const SizedBox(width: 8),
+                _pageArrow(Icons.chevron_left_rounded, bn ? 'আগের ওষুধ' : 'Previous medicine', _page > 0 ? _page - 1 : null),
+                Expanded(
+                  child: Text(
+                    bn
+                        ? '${localDigits(_page + 1, lang)} / ${localDigits(count, lang)} · সরিয়ে বা তীর চেপে দেখুন'
+                        : '${_page + 1} of $count · swipe or tap the arrows',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Color(0xFFCBD5E1), fontSize: 15),
+                  ),
+                ),
+                _pageArrow(Icons.chevron_right_rounded, bn ? 'পরের ওষুধ' : 'Next medicine', _page < count - 1 ? _page + 1 : null),
+                const SizedBox(width: 8),
+              ],
             ),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 10),
@@ -331,6 +352,24 @@ class _ReminderAlertScreenState extends ConsumerState<ReminderAlertScreen> {
       ),
     );
   }
+
+  /// "Morning · after meal" when this alarm is a meal-time slot; null for a custom time.
+  String? _slotLabel(bool bn) {
+    final slot = slotAtTime(_slot, ref.read(appSettingsProvider).slotTimes);
+    if (slot == null || !_meds.any((m) => m.slots.contains(slot.key))) return null;
+    return slot.label(bn);
+  }
+
+  Widget _pageArrow(IconData icon, String label, int? target) => IconButton(
+    tooltip: label,
+    iconSize: 34,
+    color: Colors.white,
+    disabledColor: Colors.white24,
+    icon: Icon(icon),
+    onPressed: target == null
+        ? null
+        : () => _pages.animateToPage(target, duration: const Duration(milliseconds: 300), curve: Curves.easeOutCubic),
+  );
 
   Widget _laterButton(int minutes, String lang) => OutlinedButton(
     onPressed: _busy ? null : () => _snooze(minutes),

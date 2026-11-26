@@ -1,8 +1,15 @@
 import '../../models/mock_models.dart';
+import '../../utils/dose_slots.dart';
+import '../../utils/time_utils.dart';
 
 /// What a prescription says about how to take one medicine.
 class DoseInfo {
-  final List<String> times; // empty = the prescription did not say
+  /// Parts of the day from "1+0+1", "BD", "রাতে"...: saved as meal-time slots.
+  final List<DayPart> parts;
+
+  /// Exact clock times, only for schedules that are not morning/noon/night: every 6 or 8
+  /// hours, 4 or more times a day, or times written on the prescription ("10 pm").
+  final List<String> times;
   final String? dose; // null = use the form's default
   final String? mealRelation; // 'Before Meal' | 'After Meal' | 'With Meal'
   final int? durationDays; // null = not written (or "continue")
@@ -10,6 +17,7 @@ class DoseInfo {
   final String? pattern; // the notation found, e.g. "1+0+1" or "BD"
 
   const DoseInfo({
+    this.parts = const [],
     this.times = const [],
     this.dose,
     this.mealRelation,
@@ -17,23 +25,20 @@ class DoseInfo {
     this.continuing = false,
     this.pattern,
   });
+
+  bool get hasTiming => parts.isNotEmpty || times.isNotEmpty;
+
+  /// The meal-time slots: the part of the day, and before or after meal (after when the
+  /// prescription does not say, as most Bangladeshi prescriptions mean).
+  List<DoseSlot> get slots => [
+    for (final p in parts) DoseSlot.values[p.index * 2 + (mealRelation == 'Before Meal' ? 0 : 1)],
+  ];
 }
 
-const _morning = '08:00 AM', _noon = '02:00 PM', _night = '08:00 PM';
-
-/// Usual reminder times for a dose taken [count] times a day.
-List<String> timesForCount(int count) {
-  switch (count) {
-    case 1:
-      return const [_morning];
-    case 2:
-      return const [_morning, _night];
-    case 3:
-      return const [_morning, _noon, _night];
-    default:
-      return const ['08:00 AM', '12:00 PM', '04:00 PM', '08:00 PM'];
-  }
-}
+/// Clock times for [count] doses evenly spread over 24 hours from 6 AM (every 6 hours = 4).
+List<String> intervalTimes(int count) =>
+    [for (var i = 0; i < count; i++) formatTimeOfDay((6 + i * 24 ~/ count) % 24, 0)]
+      ..sort((a, b) => minutesOfDay(a).compareTo(minutesOfDay(b)));
 
 const _bnDigits = '০১২৩৪৫৬৭৮৯';
 
@@ -59,7 +64,16 @@ final _countWords = <RegExp, int>{
   RegExp(r'\b(bd|bid|twice|2\s*times|two\s*times)\b|দিনে\s*2\s*বার', caseSensitive: false): 2,
   RegExp(r'\b(od|once(\s*daily)?|1\s*time|daily)\b|দিনে\s*1\s*বার', caseSensitive: false): 1,
 };
-final _nightOnly = RegExp(r'\b(hs|at\s*night|bed\s*time|bedtime)\b|রাতে|ঘুমানোর', caseSensitive: false);
+final _partWords = <DayPart, RegExp>{
+  DayPart.morning: RegExp(r'\bmorning\b|সকাল', caseSensitive: false),
+  DayPart.noon: RegExp(r'\b(noon|lunch)\b|দুপুর', caseSensitive: false),
+  DayPart.night: RegExp(r'\b(hs|night|bed\s*time|bedtime)\b|রাত|ঘুমানোর', caseSensitive: false),
+};
+final _interval = RegExp(
+  r'\bq\s*(\d{1,2})\s*h\b|every\s*(\d{1,2})\s*(?:hours?|hrs?)\b|\b(\d{1,2})\s*(?:hourly|hrly)\b|(\d{1,2})\s*ঘণ্টা\s*পর\s*পর',
+  caseSensitive: false,
+);
+final _clock = RegExp(r'\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b', caseSensitive: false);
 
 final _before = RegExp(
   r'before\s*(meal|food|breakfast|lunch|dinner)|\ba\.?c\.?\b|empty\s*stomach|(খাবার|খাওয়া|খাওয়া)\S*\s*(আগে|পূর্বে)|খালি\s*পেটে',
@@ -100,42 +114,81 @@ String _countDose(double n, MedicineForm form) {
   }
 }
 
+/// Exact times written on the prescription ("8 am, 10:30 pm"), or an interval ("q6h",
+/// "every 8 hours", "৬ ঘণ্টা পর পর"). Empty when neither is written.
+(List<String>, String?) _exactTimes(String t) {
+  final interval = _interval.firstMatch(t);
+  if (interval != null) {
+    final h = int.parse([1, 2, 3, 4].map(interval.group).firstWhere((g) => g != null)!);
+    if (h > 0 && h <= 12 && 24 % h == 0) return (intervalTimes(24 ~/ h), interval.group(0)!.trim());
+  }
+  final clocks = [
+    for (final m in _clock.allMatches(t))
+      if (int.parse(m.group(1)!) case final hr when hr >= 1 && hr <= 12)
+        formatTimeOfDay(hr % 12 + (m.group(3)!.toLowerCase() == 'pm' ? 12 : 0), int.tryParse(m.group(2) ?? '') ?? 0),
+  ];
+  if (clocks.isEmpty) return (const [], null);
+  return (normalizeTimeList(clocks), _clock.allMatches(t).map((m) => m.group(0)!.trim()).join(', '));
+}
+
 /// Reads dose notation from [text] (a medicine line plus the lines under it).
 /// [strengthText] is removed first so "120 mg/5 ml" is not read as a 5 ml dose.
 DoseInfo parseDose(String text, MedicineForm form, {String strengthText = ''}) {
   var t = asciiDigits(text);
   if (strengthText.isNotEmpty) t = t.replaceAll(strengthText, ' ');
 
-  List<String> times = const [];
-  String? dose, pattern;
+  var (times, pattern) = _exactTimes(t);
+  var parts = <DayPart>[];
+  String? dose;
   final slots = _slotsRe.firstMatch(t);
   if (slots != null) {
-    pattern = slots.group(0)!.replaceAll(RegExp(r'\s'), '');
+    pattern ??= slots.group(0)!.replaceAll(RegExp(r'\s'), '');
     final values = [
       for (var i = 1; i <= 4; i++)
         if (slots.group(i) != null) _slotValue(slots.group(i)!),
     ];
-    final all = values.length == 4 ? timesForCount(4) : const [_morning, _noon, _night];
-    times = [
-      for (var i = 0; i < values.length; i++)
-        if (values[i] > 0) all[i],
-    ];
-    final first = values.firstWhere((v) => v > 0, orElse: () => 0);
-    if (first > 0) dose = _countDose(first, form);
-  } else {
-    for (final e in _countWords.entries) {
-      final m = e.key.firstMatch(t);
-      if (m != null) {
-        pattern = m.group(0)!.trim();
-        times = timesForCount(e.value);
-        break;
+    if (times.isEmpty) {
+      if (values.length == 4) {
+        final four = intervalTimes(4);
+        times = [
+          for (var i = 0; i < 4; i++)
+            if (values[i] > 0) four[i],
+        ];
+      } else {
+        parts = [
+          for (var i = 0; i < 3; i++)
+            if (values[i] > 0) DayPart.values[i],
+        ];
       }
     }
-    if (times.isEmpty && _nightOnly.hasMatch(t)) {
-      pattern = _nightOnly.firstMatch(t)!.group(0);
-      times = const [_night];
-    } else if (times.length == 1 && _nightOnly.hasMatch(t)) {
-      times = const [_night];
+    final first = values.firstWhere((v) => v > 0, orElse: () => 0);
+    if (first > 0) dose = _countDose(first, form);
+  } else if (times.isEmpty) {
+    for (final e in _countWords.entries) {
+      final m = e.key.firstMatch(t);
+      if (m == null) continue;
+      pattern = m.group(0)!.trim();
+      switch (e.value) {
+        case 1:
+          parts = [DayPart.morning];
+        case 2:
+          parts = [DayPart.morning, DayPart.night];
+        case 3:
+          parts = DayPart.values.toList();
+        default:
+          times = intervalTimes(e.value);
+      }
+      break;
+    }
+    // "সকালে ও রাতে", "at night": the words name the parts of the day. They override a
+    // vague count ("once daily at night" = night).
+    final named = [
+      for (final e in _partWords.entries)
+        if (e.value.hasMatch(t)) e.key,
+    ];
+    if (named.isNotEmpty && times.isEmpty && (parts.length <= 1 || parts.length == named.length)) {
+      pattern ??= _partWords[named.first]!.firstMatch(t)!.group(0);
+      parts = named;
     }
   }
 
@@ -167,7 +220,6 @@ DoseInfo parseDose(String text, MedicineForm form, {String strengthText = ''}) {
     meal = 'With Meal';
   }
 
-  int? days;
   int? grab(RegExp re, int mult) {
     final m = re.firstMatch(t);
     if (m == null) return null;
@@ -175,10 +227,11 @@ DoseInfo parseDose(String text, MedicineForm form, {String strengthText = ''}) {
     return (n == null || n == 0) ? null : n * mult;
   }
 
-  days = grab(_days, 1) ?? grab(_weeks, 7) ?? grab(_months, 30);
+  final days = grab(_days, 1) ?? grab(_weeks, 7) ?? grab(_months, 30);
   final continuing = days == null && _continue.hasMatch(t);
 
   return DoseInfo(
+    parts: parts,
     times: times,
     dose: dose,
     mealRelation: meal,

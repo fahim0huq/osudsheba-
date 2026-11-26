@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/models/mock_models.dart';
+import '../../../../core/services/mock_data_service.dart';
 import '../../../../core/services/scan/prescription_text_parser.dart';
-import '../../../../core/utils/time_utils.dart';
+import '../../../../core/utils/dose_slots.dart';
 import '../../../medicines/presentation/widgets/medicine_form_parts.dart';
-import 'dose_pattern_chips.dart';
+import '../../../medicines/presentation/widgets/when_to_take_card.dart';
 
 /// Opens a sheet to fix one scanned medicine. Returns the corrected draft, or null on cancel.
 Future<ScanDraft?> editScanDraft(BuildContext context, ScanDraft draft, bool bn) {
@@ -16,17 +18,17 @@ Future<ScanDraft?> editScanDraft(BuildContext context, ScanDraft draft, bool bn)
   );
 }
 
-class _ScanDraftEditor extends StatefulWidget {
+class _ScanDraftEditor extends ConsumerStatefulWidget {
   const _ScanDraftEditor({required this.draft, required this.bn});
 
   final ScanDraft draft;
   final bool bn;
 
   @override
-  State<_ScanDraftEditor> createState() => _ScanDraftEditorState();
+  ConsumerState<_ScanDraftEditor> createState() => _ScanDraftEditorState();
 }
 
-class _ScanDraftEditorState extends State<_ScanDraftEditor> {
+class _ScanDraftEditorState extends ConsumerState<_ScanDraftEditor> {
   final _formKey = GlobalKey<FormState>();
   late final Medicine _m = widget.draft.medicine;
   late final _name = TextEditingController(text: _m.name);
@@ -36,8 +38,10 @@ class _ScanDraftEditorState extends State<_ScanDraftEditor> {
     text: _m.endDate == null || _m.startDate == null ? '' : '${_m.endDate!.difference(_m.startDate!).inDays + 1}',
   );
   late MedicineForm _form = _m.form;
-  late String _meal = _m.mealRelation;
-  late final List<String> _times = List.of(_m.times);
+  // Same "When to take" as Add Medicine: meal-time slots, or custom times.
+  late bool _custom = _m.slots.isEmpty && _m.times.isNotEmpty;
+  late Set<DoseSlot> _slots = slotsFromKeys(_m.slots).toSet();
+  late List<String> _customTimes = _custom ? List.of(_m.times) : const [];
 
   @override
   void dispose() {
@@ -47,27 +51,13 @@ class _ScanDraftEditorState extends State<_ScanDraftEditor> {
     super.dispose();
   }
 
-  Future<void> _pickTime(String? current) async {
-    final minutes = current == null ? 8 * 60 : minutesOfDay(current);
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay(hour: minutes ~/ 60, minute: minutes % 60),
-    );
-    if (picked == null) return;
-    final t = formatTimeOfDay(picked.hour, picked.minute);
-    setState(() {
-      if (current != null) _times.remove(current);
-      if (!_times.contains(t)) _times.add(t);
-      _times.sort((a, b) => minutesOfDay(a).compareTo(minutesOfDay(b)));
-    });
-  }
-
   void _save() {
     if (!_formKey.currentState!.validate()) return;
-    if (_times.isEmpty) {
+    final slots = DoseSlot.values.where(_slots.contains).toList();
+    if (_custom ? _customTimes.isEmpty : slots.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(widget.bn ? 'অন্তত একটি সময় দিন' : 'Add at least one reminder time'),
+          content: Text(widget.bn ? 'কখন খাবেন, অন্তত একটি বেছে নিন' : 'Choose at least one time to take it'),
           backgroundColor: AppColors.error,
         ),
       );
@@ -80,8 +70,9 @@ class _ScanDraftEditorState extends State<_ScanDraftEditor> {
       strength: _strength.text.trim(),
       form: _form,
       dose: doseForSave(_dose.text, _form),
-      mealRelation: _meal,
-      times: _times,
+      times: _custom ? _customTimes : timesForSlots(slots, ref.read(appSettingsProvider).slotTimes),
+      mealRelation: _custom ? 'None' : mealRelationForSlots(slots),
+      slots: _custom ? const [] : [for (final s in slots) s.key],
       endDate: days == null || days < 1 ? null : start.add(Duration(days: days - 1)),
       clearEndDate: days == null || days < 1,
     );
@@ -132,34 +123,28 @@ class _ScanDraftEditorState extends State<_ScanDraftEditor> {
               pairedFields(
                 stacked,
                 DoseField(controller: _dose, form: _form, bn: bn),
-                MealRelationDropdown(value: _meal, bn: bn, onChanged: (v) => setState(() => _meal = v)),
-              ),
-              const SizedBox(height: 10),
-              DosePatternChips(
-                times: _times,
-                bn: bn,
-                onSelected: (t) => setState(
-                  () => _times
-                    ..clear()
-                    ..addAll(t),
+                TextFormField(
+                  controller: _days,
+                  keyboardType: TextInputType.number,
+                  decoration: compactFieldDecoration(
+                    bn ? 'কত দিন' : 'Days',
+                    hint: bn ? 'খালি = চলবে' : 'Empty = keeps going',
+                  ),
                 ),
               ),
-              const SizedBox(height: 6),
-              ReminderTimesRow(
-                times: _times,
-                bn: bn,
-                onRemove: (t) => setState(() => _times.remove(t)),
-                onAdd: () => _pickTime(null),
-                onEdit: _pickTime,
-              ),
               const SizedBox(height: 10),
-              TextFormField(
-                controller: _days,
-                keyboardType: TextInputType.number,
-                decoration: compactFieldDecoration(
-                  bn ? 'কত দিন' : 'Days',
-                  hint: bn ? 'খালি = চলবে' : 'Empty = keeps going',
-                ),
+              WhenToTakeCard(
+                custom: _custom,
+                slots: _slots,
+                slotTimes: ref.watch(appSettingsProvider.select((s) => s.slotTimes)),
+                times: _customTimes,
+                onModeChanged: (c) => setState(() {
+                  _custom = c;
+                  if (c && _customTimes.isEmpty) _customTimes = evenlySpacedTimes(4);
+                }),
+                onSlotsChanged: (v) => setState(() => _slots = v),
+                onTimesChanged: (v) => setState(() => _customTimes = v),
+                lang: bn ? 'bn' : 'en',
               ),
               const SizedBox(height: 14),
               Row(

@@ -21,6 +21,7 @@ import '../features/profile/presentation/patient_profile_setup_screen.dart';
 import '../features/profile/presentation/caregiver_profile_setup_screen.dart';
 import '../features/home/presentation/main_navigation_screen.dart';
 import '../features/home/presentation/home_screen.dart';
+import '../features/medicines/presentation/manage_medicines_screen.dart';
 import '../features/medicines/presentation/add_medicine_screen.dart';
 import '../features/prescription/presentation/upload_prescription_screen.dart';
 import '../features/adherence/presentation/adherence_dashboard_screen.dart';
@@ -34,6 +35,7 @@ import '../features/medicines/presentation/dose_action_screen.dart';
 import '../features/prescription/presentation/ai_prescription_review_screen.dart';
 import '../features/reminders/presentation/reminder_alert_screen.dart';
 import '../features/reminders/presentation/reminder_settings_screen.dart';
+import '../features/reminders/presentation/meal_times_screen.dart';
 
 import '../features/adherence/presentation/adherence_history_screen.dart';
 import '../features/adherence/presentation/adherence_insights_screen.dart';
@@ -151,9 +153,14 @@ final GoRouter appRouter = GoRouter(
         StatefulShellBranch(routes: [GoRoute(path: '/home', builder: (context, state) => const HomeScreen())]),
         StatefulShellBranch(routes: [GoRoute(path: '/add-medicine', builder: (context, state) => const AddMedicineScreen())]),
         StatefulShellBranch(routes: [GoRoute(path: '/upload-prescription', builder: (context, state) => const UploadPrescriptionScreen())]),
-        StatefulShellBranch(routes: [GoRoute(path: '/adherence', builder: (context, state) => const AdherenceDashboardScreen())]),
+        StatefulShellBranch(routes: [GoRoute(path: '/my-medicines', builder: (context, state) => const ManageMedicinesScreen())]),
         StatefulShellBranch(routes: [GoRoute(path: '/caregiver', builder: (context, state) => const CaregiverDashboardScreen())]),
       ],
+    ),
+    // Report (adherence): opened from Settings.
+    GoRoute(
+      path: '/adherence',
+      builder: (context, state) => const AdherenceDashboardScreen(),
     ),
     // Add Medicine as its own page (with a back arrow), for screens outside the tabs.
     GoRoute(
@@ -219,6 +226,10 @@ final GoRouter appRouter = GoRouter(
     GoRoute(
       path: '/reminder-settings',
       builder: (context, state) => const ReminderSettingsScreen(),
+    ),
+    GoRoute(
+      path: '/meal-times',
+      builder: (context, state) => const MealTimesScreen(),
     ),
     GoRoute(
       path: '/adherence-history',

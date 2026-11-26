@@ -22,22 +22,28 @@ class PrescriptionService {
 
   static Future<String>? _catalogText;
 
-  Future<PrescriptionAnalysisResult> analyzePrescription(String imagePath) async {
+  Future<PrescriptionAnalysisResult> analyzePrescription(
+    String imagePath, {
+    Map<String, String> slotTimes = const {},
+  }) async {
     final text = await _ocr.extractTextFromImage(imagePath);
     final tsv = await (_catalogText ??= rootBundle.loadString(catalogAsset));
-    final drafts = await compute(_parseInIsolate, (tsv, text, DateTime.now(), false));
+    final drafts = await compute(_parseInIsolate, (tsv, text, DateTime.now(), false, slotTimes));
     return PrescriptionAnalysisResult(rawText: text, drafts: drafts);
   }
 
   /// Finds the medicines on photos of medicine packets (strips, boxes, bottles).
-  Future<PrescriptionAnalysisResult> analyzePackets(List<String> imagePaths) async {
+  Future<PrescriptionAnalysisResult> analyzePackets(
+    List<String> imagePaths, {
+    Map<String, String> slotTimes = const {},
+  }) async {
     final texts = [for (final p in imagePaths) await _ocr.extractTextFromImage(p)];
     final tsv = await (_catalogText ??= rootBundle.loadString(catalogAsset));
     final drafts = <ScanDraft>[];
     final seen = <String>{};
     for (final text in texts) {
       // One photo at a time, so a strength on one packet is not given to another.
-      for (final d in await compute(_parseInIsolate, (tsv, text, DateTime.now(), true))) {
+      for (final d in await compute(_parseInIsolate, (tsv, text, DateTime.now(), true, slotTimes))) {
         if (seen.add('${d.medicine.name}|${d.medicine.strength}')) drafts.add(d);
       }
     }
@@ -51,5 +57,5 @@ class PrescriptionService {
 
 final medicineCatalogProvider = FutureProvider<MedicineCatalog>((ref) => PrescriptionService.loadCatalog());
 
-List<ScanDraft> _parseInIsolate((String, String, DateTime, bool) args) =>
-    parsePrescription(args.$2, MedicineCatalog.parse(args.$1), now: args.$3, packets: args.$4);
+List<ScanDraft> _parseInIsolate((String, String, DateTime, bool, Map<String, String>) args) =>
+    parsePrescription(args.$2, MedicineCatalog.parse(args.$1), now: args.$3, packets: args.$4, slotTimes: args.$5);

@@ -11,6 +11,8 @@ import '../models/mock_models.dart';
 import '../utils/schedule_utils.dart';
 import '../utils/stock.dart';
 import '../utils/time_utils.dart';
+import '../utils/dose_slots.dart';
+import '../utils/dose_text.dart';
 import 'local_storage_service.dart';
 
 class NotificationService {
@@ -21,6 +23,14 @@ class NotificationService {
 
   /// Payload stored during cold start launch from notification
   String? launchPayload;
+
+  /// True while a medicine alarm screen is open (set when it is being opened). The start-up
+  /// screen must not navigate away then: doing so replaced the alarm a moment after it
+  /// appeared over the lock screen, and it only came back after the phone was unlocked.
+  final ValueNotifier<bool> alarmScreenOpen = ValueNotifier(false);
+
+  /// How many alarm screens are actually built (alarmScreenOpen is set slightly earlier).
+  int alarmScreensMounted = 0;
 
   /// Stream controller to expose tap payload responses to the app
   static final StreamController<String?> selectNotificationPayload = StreamController<String?>.broadcast();
@@ -197,6 +207,8 @@ class NotificationService {
   /// Get standard alarm notification details for Android and iOS
   NotificationDetails _buildAlarmNotificationDetails({
     required String ticker,
+    List<String> lines = const [],
+    String? summary,
   }) {
     // Full-screen alarm (the user's choice in Reminder settings): Android opens the alarm
     // screen over the lock screen and wakes the phone. Otherwise a notification only.
@@ -216,7 +228,11 @@ class NotificationService {
       ongoing: true,
       autoCancel: true,
       ticker: ticker,
-      styleInformation: const BigTextStyleInformation(''),
+      // Expanded notification (phones without the full-screen alarm): every medicine of the
+      // time on its own line with its dose. (Previously an empty big-text style.)
+      styleInformation: lines.isEmpty
+          ? null
+          : InboxStyleInformation(lines, contentTitle: ticker, summaryText: summary),
     );
 
     const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
@@ -469,9 +485,20 @@ class NotificationService {
           ? (medCount > 1 ? 'ওষুধ খাওয়ার সময় ($medCountটি ওষুধ)' : 'ওষুধ খাওয়ার সময় হয়েছে')
           : (medCount > 1 ? 'Time for your medicines ($medCount)' : 'Time for your medicine');
     }
+    // A meal-time slot names itself: "Morning · after meal — Due now: Napa, Seclo".
+    final slotTimes = (LocalStorageService().getSettings() ?? AppSettings()).slotTimes;
+    final mealSlot = slotAtTime(slot, slotTimes);
+    final prefix = mealSlot != null && medicines.any((m) => m.slots.contains(mealSlot.key))
+        ? '${mealSlot.label(lang == 'bn')} — '
+        : '';
     final String body = lang == 'bn'
-        ? 'এখন খাওয়ার সময়: ${medSummaryList.join(", ")}'
-        : 'Due now: ${medSummaryList.join(", ")}';
+        ? '$prefixএখন খাওয়ার সময়: ${medSummaryList.join(", ")}'
+        : '${prefix}Due now: ${medSummaryList.join(", ")}';
+    // One line per medicine for the expanded notification: "Napa 500mg — 1 tablet".
+    final lines = [
+      for (final m in medicines) '${'${m.name} ${m.strength}'.trim()} — ${doseLabel(m, lang)}',
+    ];
+    final summary = mealSlot != null && prefix.isNotEmpty ? mealSlot.label(lang == 'bn') : null;
 
     final String payload = jsonEncode({
       'scheduledTime': slot,
@@ -480,7 +507,7 @@ class NotificationService {
       if (isSnooze) 'isSnooze': true,
     });
 
-    final details = _buildAlarmNotificationDetails(ticker: title);
+    final details = _buildAlarmNotificationDetails(ticker: title, lines: lines, summary: summary);
 
     Future<void> schedule(AndroidScheduleMode mode) => _plugin.zonedSchedule(
           id,
@@ -494,18 +521,27 @@ class NotificationService {
           payload: payload,
         );
 
-    try {
-      await schedule(AndroidScheduleMode.exactAllowWhileIdle);
-    } catch (e) {
-      // Exact alarm permission missing: still schedule, but warn the user in the app.
-      exactAlarmsUnavailable = true;
-      dev.log('NotificationService Warning: exact alarm failed ($e); falling back to inexact.');
+    await _scheduleMostReliable(schedule, 'alarm $id for $slot');
+  }
+
+  /// Schedules with Android's alarm-clock type first: it is never delayed by deep sleep or
+  /// battery saving ("exact while idle" alarms may fire only once per ~9 minutes per app in
+  /// deep sleep, and some phones delay them further). Falls back to exact, then inexact.
+  Future<void> _scheduleMostReliable(Future<void> Function(AndroidScheduleMode) schedule, String what) async {
+    for (final mode in const [
+      AndroidScheduleMode.alarmClock,
+      AndroidScheduleMode.exactAllowWhileIdle,
+      AndroidScheduleMode.inexactAllowWhileIdle,
+    ]) {
       try {
-        await schedule(AndroidScheduleMode.inexactAllowWhileIdle);
-      } catch (err) {
-        dev.log('NotificationService Error: could not schedule alarm $id for $slot: $err');
+        await schedule(mode);
+        if (mode == AndroidScheduleMode.inexactAllowWhileIdle) exactAlarmsUnavailable = true;
+        return;
+      } catch (e) {
+        dev.log('NotificationService: $what with $mode failed ($e); trying the next type.');
       }
     }
+    dev.log('NotificationService Error: could not schedule $what.');
   }
 
   /// Set when the OS refused exact alarms; reminders may then arrive several minutes late.
@@ -617,12 +653,6 @@ class NotificationService {
     await scheduleSnoozeForTimeGroup(timeStr, [medicine], minutes);
   }
 
-  /// Debug test notification: schedules a test alarm to fire in 30 seconds
-  Future<void> scheduleTestNotification() async {
-    if (kIsWeb || !kDebugMode) return;
-    await _scheduleTestAlarm(const Duration(seconds: 30));
-  }
-
   /// Schedules a clearly-labelled TEST alarm one minute from now so users and caregivers
   /// can check that alarms ring on this phone (sound, lock screen, battery settings).
   /// The test does not reference real medicines and tapping it never records a dose.
@@ -654,12 +684,7 @@ class NotificationService {
           uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
           payload: payload,
         );
-    try {
-      await schedule(AndroidScheduleMode.exactAllowWhileIdle);
-    } catch (_) {
-      exactAlarmsUnavailable = true;
-      await schedule(AndroidScheduleMode.inexactAllowWhileIdle);
-    }
+    await _scheduleMostReliable(schedule, 'test alarm');
     return scheduledDate;
   }
 

@@ -1,5 +1,6 @@
 import 'package:uuid/uuid.dart';
 import '../../models/mock_models.dart';
+import '../../utils/dose_slots.dart';
 import 'dose_parser.dart';
 import 'medicine_catalog.dart';
 import 'scan_words.dart';
@@ -99,11 +100,19 @@ bool _hasDose(String text) {
       for (final k in {key, _ocrLetters(key)}) {
         final b = catalog.exactBrand(k);
         if (b != null) {
-          return (match: CatalogMatch(b, tokens.sublist(w, w + n).join(' '), 0, false, w, n), prefix: prefix, strength: strength);
+          return (
+            match: CatalogMatch(b, tokens.sublist(w, w + n).join(' '), 0, false, w, n),
+            prefix: prefix,
+            strength: strength,
+          );
         }
         final g = catalog.exactGeneric(k);
         if (g != null) {
-          return (match: CatalogMatch(g, tokens.sublist(w, w + n).join(' '), 0, true, w, n), prefix: prefix, strength: strength);
+          return (
+            match: CatalogMatch(g, tokens.sublist(w, w + n).join(' '), 0, true, w, n),
+            prefix: prefix,
+            strength: strength,
+          );
         }
       }
     }
@@ -140,7 +149,16 @@ bool _hasDose(String text) {
 /// Turns OCR text of a prescription into medicine suggestions.
 /// With [packets], [rawText] is read from medicine packets: no doses, and the strength
 /// can be anywhere on the packet.
-List<ScanDraft> parsePrescription(String rawText, MedicineCatalog catalog, {DateTime? now, bool packets = false}) {
+///
+/// [slotTimes] are the person's meal-time clock times (AppSettings.slotTimes), so a
+/// "1+0+1" medicine gets the same reminder times as medicines added by hand.
+List<ScanDraft> parsePrescription(
+  String rawText,
+  MedicineCatalog catalog, {
+  DateTime? now,
+  bool packets = false,
+  Map<String, String> slotTimes = const {},
+}) {
   final lines = rawText.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
   final found = <int, ({CatalogMatch match, MedicineForm? prefix, String strength})>{};
   for (var i = 0; i < lines.length; i++) {
@@ -159,8 +177,8 @@ List<ScanDraft> parsePrescription(String rawText, MedicineCatalog catalog, {Date
     final end = k + 1 < starts.length ? starts[k + 1] : lines.length;
     final block = lines.sublist(i, end.clamp(i + 1, i + 4)).join('\n');
     final d = packets
-        ? _draft(_withPacketStrength(found[i]!, rawText), '', now ?? DateTime.now(), packets: true)
-        : _draft(found[i]!, block, now ?? DateTime.now());
+        ? _draft(_withPacketStrength(found[i]!, rawText), '', now ?? DateTime.now(), slotTimes, packets: true)
+        : _draft(found[i]!, block, now ?? DateTime.now(), slotTimes);
     if (seen.add('${nameKey(d.medicine.name)}|${_strengthKey(d.medicine.strength)}')) drafts.add(d);
   }
   return drafts;
@@ -181,7 +199,7 @@ _Found _withPacketStrength(_Found f, String packetText) {
   return f;
 }
 
-ScanDraft _draft(_Found f, String block, DateTime now, {bool packets = false}) {
+ScanDraft _draft(_Found f, String block, DateTime now, Map<String, String> slotTimes, {bool packets = false}) {
   final issues = <ScanIssue>{};
   final sKey = _strengthKey(f.strength);
   bool hasStrength(CatalogEntry e) =>
@@ -220,7 +238,15 @@ ScanDraft _draft(_Found f, String block, DateTime now, {bool packets = false}) {
   }
 
   final info = packets ? const DoseInfo() : parseDose(block, form, strengthText: f.strength);
-  if (info.times.isEmpty) issues.add(ScanIssue.timesMissing);
+  if (!info.hasTiming) issues.add(ScanIssue.timesMissing);
+  // Morning / noon / night become meal-time slots, like Add Medicine; not written = morning,
+  // flagged above. Exact or interval times stay custom times.
+  final custom = info.times.isNotEmpty;
+  final slots = custom
+      ? const <DoseSlot>[]
+      : (info.hasTiming
+            ? info.slots
+            : [info.mealRelation == 'Before Meal' ? DoseSlot.morningBefore : DoseSlot.morningAfter]);
   if (info.durationDays == null && !info.continuing) issues.add(ScanIssue.durationMissing);
   if (f.match.distance > 0) issues.add(ScanIssue.nameGuessed);
 
@@ -233,8 +259,9 @@ ScanDraft _draft(_Found f, String block, DateTime now, {bool packets = false}) {
       strength: strength,
       form: form,
       dose: doseForSave(info.dose ?? form.defaultDose, form),
-      times: info.times.isEmpty ? const ['08:00 AM'] : info.times,
-      mealRelation: info.mealRelation ?? 'None',
+      times: custom ? info.times : timesForSlots(slots, slotTimes),
+      mealRelation: custom ? 'None' : mealRelationForSlots(slots),
+      slots: [for (final s in slots) s.key],
       instruction: '',
       startDate: start,
       endDate: info.durationDays == null ? null : start.add(Duration(days: info.durationDays! - 1)),

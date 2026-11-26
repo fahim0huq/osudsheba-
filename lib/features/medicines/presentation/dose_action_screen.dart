@@ -208,7 +208,7 @@ class DoseActionScreen extends ConsumerWidget {
                               ),
                             ),
                             Text(
-                              scheduledTime,
+                              displayTime(scheduledTime, lang),
                               style: const TextStyle(
                                 fontSize: 18.0,
                                 fontWeight: FontWeight.bold,
@@ -225,7 +225,7 @@ class DoseActionScreen extends ConsumerWidget {
                           borderRadius: BorderRadius.circular(12.0),
                         ),
                         child: Text(
-                          '${targetMedicines.length} ${targetMedicines.length == 1 ? (lang == 'bn' ? 'টি ওষুধ' : 'med') : (lang == 'bn' ? 'টি ওষুধ' : 'meds')}',
+                          '${localDigits(targetMedicines.length, lang)} ${targetMedicines.length == 1 ? (lang == 'bn' ? 'টি ওষুধ' : 'med') : (lang == 'bn' ? 'টি ওষুধ' : 'meds')}',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 13.5,
@@ -288,7 +288,7 @@ class DoseActionScreen extends ConsumerWidget {
                                   ),
                                   const SizedBox(height: 2.0),
                                   Text(
-                                    '${lang == 'bn' ? 'ডোজ' : 'Dose'}: ${doseLabel(med, lang)} • ${med.mealRelation}',
+                                    '${lang == 'bn' ? 'ডোজ' : 'Dose'}: ${[doseLabel(med, lang), mealLabel(med.mealRelation, lang)].where((s) => s.isNotEmpty).join(' • ')}',
                                     style: const TextStyle(
                                       fontSize: 13.0,
                                       color: AppColors.textSecondary,

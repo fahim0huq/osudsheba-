@@ -6,9 +6,10 @@ import '../../../core/models/mock_models.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../shared/widgets/app_primary_button.dart';
 import '../../../shared/widgets/fade_slide_in.dart';
-import '../../../core/utils/time_utils.dart';
 import 'widgets/medicine_form_parts.dart';
 import 'widgets/medicine_photo_field.dart';
+import 'widgets/when_to_take_card.dart';
+import '../../../core/utils/dose_slots.dart';
 
 class EditMedicineScreen extends ConsumerStatefulWidget {
   final Medicine? medicine;
@@ -27,8 +28,10 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
   late TextEditingController _instructionController;
 
   late MedicineForm _selectedForm;
-  late String _selectedMealRelation;
-  late List<String> _reminderTimes;
+  /// Meal-time slots, or custom times (medicines saved before slots existed open as custom).
+  late Set<DoseSlot> _slots;
+  late bool _custom;
+  late List<String> _customTimes;
   late Medicine _targetMedicine;
   bool _missing = false;
   DateTime? _endDate;
@@ -62,8 +65,10 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
     _doseController = TextEditingController(text: doseFieldText(_targetMedicine.dose, _targetMedicine.form));
     _instructionController = TextEditingController(text: _targetMedicine.instruction);
     _selectedForm = _targetMedicine.form;
-    _selectedMealRelation = _targetMedicine.mealRelation;
-    _reminderTimes = List.from(_targetMedicine.times);
+    final slots = slotsFromKeys(_targetMedicine.slots);
+    _custom = slots.isEmpty;
+    _slots = slots.isEmpty ? {DoseSlot.morningAfter, DoseSlot.nightAfter} : slots.toSet();
+    _customTimes = slots.isEmpty ? List.of(_targetMedicine.times) : evenlySpacedTimes(4);
   }
 
   @override
@@ -73,34 +78,6 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
     _doseController.dispose();
     _instructionController.dispose();
     super.dispose();
-  }
-
-  void _addReminderTime() async {
-    final TimeOfDay? time = await showTimePicker(context: context, initialTime: TimeOfDay.now());
-    if (time != null) {
-      setState(() {
-        final formatted = formatTimeOfDay(time.hour, time.minute);
-        if (!_reminderTimes.any((t) => sameTimeOfDay(t, formatted))) {
-          _reminderTimes.add(formatted);
-          _reminderTimes.sort((a, b) => minutesOfDay(a).compareTo(minutesOfDay(b)));
-        }
-      });
-    }
-  }
-
-  /// Tapping a time chip: pick a new time for it.
-  Future<void> _editReminderTime(String old) async {
-    final m = minutesOfDay(old);
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: m < 0 ? TimeOfDay.now() : TimeOfDay(hour: m ~/ 60, minute: m % 60),
-    );
-    if (picked == null || !mounted) return;
-    setState(() {
-      final formatted = formatTimeOfDay(picked.hour, picked.minute);
-      _reminderTimes = [..._reminderTimes.where((t) => t != old && !sameTimeOfDay(t, formatted)), formatted]
-        ..sort((a, b) => minutesOfDay(a).compareTo(minutesOfDay(b)));
-    });
   }
 
   Future<void> _selectEndDate() async {
@@ -201,14 +178,18 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
                           stacked: stacked,
                         ),
                         const SizedBox(height: kFormGap),
-                        pairedFields(
-                          stacked,
-                          MealRelationDropdown(
-                            value: _selectedMealRelation,
-                            onChanged: (v) => setState(() => _selectedMealRelation = v),
-                            bn: bn,
-                          ),
-                          OutlinedButton.icon(
+                        WhenToTakeCard(
+                          custom: _custom,
+                          slots: _slots,
+                          slotTimes: ref.watch(appSettingsProvider.select((s) => s.slotTimes)),
+                          times: _customTimes,
+                          onModeChanged: (c) => setState(() => _custom = c),
+                          onSlotsChanged: (v) => setState(() => _slots = v),
+                          onTimesChanged: (v) => setState(() => _customTimes = v),
+                          lang: lang,
+                        ),
+                        const SizedBox(height: kFormGap),
+                        OutlinedButton.icon(
                             style: OutlinedButton.styleFrom(
                               minimumSize: const Size(0, 52.0),
                               padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 8.0),
@@ -221,7 +202,6 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
                             ),
                             onPressed: _selectEndDate,
                           ),
-                        ),
                         if (ended)
                           Padding(
                             padding: const EdgeInsets.only(top: 8.0),
@@ -242,14 +222,6 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
                             label: Text(bn ? 'শেষ তারিখ সরান (চলতে থাকবে)' : 'Remove end date (keep going)'),
                             onPressed: () => setState(() => _endDate = null),
                           ),
-                        const SizedBox(height: kFormGap),
-                        ReminderTimesRow(
-                          times: _reminderTimes,
-                          onRemove: (t) => setState(() => _reminderTimes.remove(t)),
-                          onAdd: _addReminderTime,
-                          onEdit: _editReminderTime,
-                          bn: bn,
-                        ),
                         const SizedBox(height: kFormGap),
                         TextFormField(
                           controller: _instructionController,
@@ -282,10 +254,14 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
 
   void _save(String lang) {
     if (!_formKey.currentState!.validate()) return;
-    if (_reminderTimes.isEmpty) {
+    final bn = lang == 'bn';
+    final slots = DoseSlot.values.where(_slots.contains).toList();
+    if (_custom ? _customTimes.isEmpty : slots.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(lang == 'bn' ? 'কমপক্ষে একটি অ্যালার্মের সময় দিন' : 'Add at least one reminder time'),
+          content: Text(_custom
+              ? (bn ? 'কমপক্ষে একটি সময় দিন' : 'Add at least one time')
+              : (bn ? 'সকাল, দুপুর বা রাত: কমপক্ষে একটি বেছে নিন' : 'Choose at least one: morning, noon or night')),
           backgroundColor: AppColors.error,
         ),
       );
@@ -296,8 +272,12 @@ class _EditMedicineScreenState extends ConsumerState<EditMedicineScreen> {
       strength: _strengthController.text.trim(),
       form: _selectedForm,
       dose: doseForSave(_doseController.text, _selectedForm),
-      times: _reminderTimes,
-      mealRelation: _selectedMealRelation,
+      times: _custom ? _customTimes : timesForSlots(slots, ref.read(appSettingsProvider).slotTimes),
+      // A custom medicine keeps the meal note it had (older medicines); slots set their own.
+      mealRelation: _custom
+          ? (_targetMedicine.slots.isEmpty ? _targetMedicine.mealRelation : 'None')
+          : mealRelationForSlots(slots),
+      slots: _custom ? const [] : [for (final s in slots) s.key],
       instruction: _instructionController.text.trim(),
       endDate: _endDate,
       clearEndDate: _endDate == null,

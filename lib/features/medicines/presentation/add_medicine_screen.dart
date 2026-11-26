@@ -8,12 +8,12 @@ import '../../../core/services/mock_data_service.dart';
 import '../../../shared/widgets/app_primary_button.dart';
 import '../../../shared/widgets/fade_slide_in.dart';
 import '../../../core/utils/stock.dart';
-import '../../../core/utils/time_label.dart';
-import '../../../core/utils/time_utils.dart';
 import 'widgets/add_medicine_parts.dart';
 import 'widgets/dates_notes_sheet.dart';
 import 'widgets/medicine_form_parts.dart';
 import 'widgets/medicine_photo_field.dart';
+import 'widgets/when_to_take_card.dart';
+import '../../../core/utils/dose_slots.dart';
 
 /// Add Medicine: three friendly blocks (what it is, its type, when to take it) answered
 /// mostly by tapping, plus one quiet row for dates and notes. Fits one screen on normal phones.
@@ -32,11 +32,13 @@ class _AddMedicineScreenState extends ConsumerState<AddMedicineScreen> {
   final _instructionController = TextEditingController();
 
   MedicineForm _selectedForm = MedicineForm.tablet;
-  String _selectedMealRelation = 'After Meal';
-  List<String> _reminderTimes = ['08:00 AM', '08:00 PM'];
 
-  /// "Custom" chosen: the person sets their own times (any number) with the time tiles.
+  /// Meal-time slots (the usual case): "1+0+1, after meal" = morning and night after meal.
+  Set<DoseSlot> _slots = {DoseSlot.morningAfter, DoseSlot.nightAfter};
+
+  /// "Custom" chosen: exact times for this medicine instead of meal-time slots.
   bool _custom = false;
+  List<String> _customTimes = evenlySpacedTimes(4);
 
   DateTime _startDate = DateTime.now();
 
@@ -57,53 +59,6 @@ class _AddMedicineScreenState extends ConsumerState<AddMedicineScreen> {
     _doseController.dispose();
     _instructionController.dispose();
     super.dispose();
-  }
-
-  void _sortTimes() => _reminderTimes.sort((a, b) => minutesOfDay(a).compareTo(minutesOfDay(b)));
-
-  Future<void> _addReminderTime() async {
-    final time = await showTimePicker(context: context, initialTime: TimeOfDay.now());
-    if (time == null || !mounted) return;
-    setState(() {
-      // Store in the app's canonical format. time.format(context) produced "20:30" on
-      // phones set to 24-hour time, which the alarm scheduler could not read.
-      final formatted = formatTimeOfDay(time.hour, time.minute);
-      if (!_reminderTimes.any((t) => sameTimeOfDay(t, formatted))) {
-        _reminderTimes = [..._reminderTimes, formatted];
-        _sortTimes();
-      }
-    });
-  }
-
-  /// Tapping a time tile: pick a new time for it.
-  Future<void> _editReminderTime(String old) async {
-    final m = minutesOfDay(old);
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: m < 0 ? TimeOfDay.now() : TimeOfDay(hour: m ~/ 60, minute: m % 60),
-    );
-    if (picked == null || !mounted) return;
-    setState(() {
-      final formatted = formatTimeOfDay(picked.hour, picked.minute);
-      _reminderTimes = [..._reminderTimes.where((t) => t != old && !sameTimeOfDay(t, formatted)), formatted];
-      _sortTimes();
-    });
-  }
-
-  /// "Once / Twice / 3 times a day" sets the usual times; each can then be changed.
-  void _setTimesPerDay(int n) => setState(() {
-    _custom = false;
-    _reminderTimes = switch (n) {
-      1 => ['08:00 AM'],
-      2 => ['08:00 AM', '08:00 PM'],
-      _ => ['08:00 AM', '02:00 PM', '08:00 PM'],
-    };
-  });
-
-  /// "Custom": keep the times shown and ask for one more, so the person builds their own list.
-  void _chooseCustom() {
-    setState(() => _custom = true);
-    _addReminderTime();
   }
 
   Future<void> _openDatesNotes(String lang) async {
@@ -155,25 +110,15 @@ class _AddMedicineScreenState extends ConsumerState<AddMedicineScreen> {
                       children: [
                         _header(bn, stacked),
                         const SizedBox(height: 10),
-                        FormCard(
-                          title: bn ? 'কখন খাবেন' : 'When to take',
-                          icon: Icons.alarm_rounded,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              _labelled(bn ? 'দিনে' : 'A day', _timesPerDayPills(lang), stacked),
-                              const SizedBox(height: 10),
-                              TimeTiles(
-                                times: _reminderTimes,
-                                onEdit: _editReminderTime,
-                                onRemove: (t) => setState(() => _reminderTimes = [..._reminderTimes]..remove(t)),
-                                onAdd: _addReminderTime,
-                                lang: lang,
-                              ),
-                              const SizedBox(height: 10),
-                              _labelled(bn ? 'খাবারের' : 'Meal', _mealPills(bn), stacked),
-                            ],
-                          ),
+                        WhenToTakeCard(
+                          custom: _custom,
+                          slots: _slots,
+                          slotTimes: ref.watch(appSettingsProvider.select((s) => s.slotTimes)),
+                          times: _customTimes,
+                          onModeChanged: (c) => setState(() => _custom = c),
+                          onSlotsChanged: (v) => setState(() => _slots = v),
+                          onTimesChanged: (v) => setState(() => _customTimes = v),
+                          lang: lang,
                         ),
                         const SizedBox(height: 10),
                         MoreOptionsRow(
@@ -282,74 +227,17 @@ class _AddMedicineScreenState extends ConsumerState<AddMedicineScreen> {
     );
   }
 
-  /// "A day  [pills]" on one line, or the label above the pills when space is short.
-  Widget _labelled(String label, Widget pills, bool stacked) {
-    final text = Text(
-      label,
-      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
-    );
-    if (stacked) {
-      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [text, const SizedBox(height: 6), pills]);
-    }
-    return Row(
-      children: [
-        SizedBox(width: 58, child: text),
-        Expanded(child: pills),
-      ],
-    );
-  }
-
-  Widget _timesPerDayPills(String lang) {
-    final bn = lang == 'bn';
-    const en = ['Once', 'Twice', '3 times'];
-    final custom = _custom || _reminderTimes.length > 3;
-    return ChoicePills(
-      choices: [
-        for (var n = 1; n <= 3; n++)
-          PillChoice(
-            bn ? '${localDigits(n, lang)} বার' : en[n - 1],
-            selected: !custom && _reminderTimes.length == n,
-            semantics: bn ? 'দিনে ${localDigits(n, lang)} বার' : '${en[n - 1]} a day',
-            onTap: () => _setTimesPerDay(n),
-          ),
-        PillChoice(
-          bn ? 'কাস্টম' : 'Custom',
-          selected: custom,
-          semantics: bn ? 'নিজের মতো সময় দিন' : 'Choose your own times',
-          onTap: _chooseCustom,
-        ),
-      ],
-    );
-  }
-
-  Widget _mealPills(bool bn) {
-    const options = [
-      ('Before Meal', 'আগে', 'Before'),
-      ('With Meal', 'সাথে', 'With'),
-      ('After Meal', 'পরে', 'After'),
-      ('None', 'যেকোনো', 'Any time'),
-    ];
-    return ChoicePills(
-      choices: [
-        for (final (value, b, e) in options)
-          PillChoice(
-            bn ? b : e,
-            selected: _selectedMealRelation == value,
-            semantics: bn ? (value == 'None' ? 'যেকোনো সময়' : 'খাবারের $b') : (value == 'None' ? e : '$e meal'),
-            onTap: () => setState(() => _selectedMealRelation = value),
-          ),
-      ],
-    );
-  }
-
   void _error(String text) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text), backgroundColor: AppColors.error));
 
   void _save(String lang) {
     final bn = lang == 'bn';
     if (!_formKey.currentState!.validate()) return;
-    if (_reminderTimes.isEmpty) {
-      _error(bn ? 'কমপক্ষে একটি অ্যালার্মের সময় নির্ধারণ করুন' : 'At least one reminder time is required');
+    final slots = DoseSlot.values.where(_slots.contains).toList();
+    if (_custom ? _customTimes.isEmpty : slots.isEmpty) {
+      _error(_custom
+          ? (bn ? 'কমপক্ষে একটি সময় দিন' : 'Add at least one time')
+          : (bn ? 'সকাল, দুপুর বা রাত: কমপক্ষে একটি বেছে নিন' : 'Choose at least one: morning, noon or night'));
       return;
     }
     if (_endDate != null && _endDate!.isBefore(_startDate)) {
@@ -365,8 +253,10 @@ class _AddMedicineScreenState extends ConsumerState<AddMedicineScreen> {
       strength: _strengthController.text.trim(),
       form: _selectedForm,
       dose: doseForSave(_doseController.text, _selectedForm),
-      times: _reminderTimes,
-      mealRelation: _selectedMealRelation,
+      // Slot medicines share their slot's time (one reminder per slot); custom ones keep theirs.
+      times: _custom ? _customTimes : timesForSlots(slots, ref.read(appSettingsProvider).slotTimes),
+      mealRelation: _custom ? 'None' : mealRelationForSlots(slots),
+      slots: _custom ? const [] : [for (final s in slots) s.key],
       instruction: _instructionController.text.trim(),
       status: 'active',
       startDate: _startDate,
@@ -404,8 +294,8 @@ class _AddMedicineScreenState extends ConsumerState<AddMedicineScreen> {
     _instructionController.clear();
     setState(() {
       _selectedForm = MedicineForm.tablet;
-      _selectedMealRelation = 'After Meal';
-      _reminderTimes = ['08:00 AM', '08:00 PM'];
+      _slots = {DoseSlot.morningAfter, DoseSlot.nightAfter};
+      _customTimes = evenlySpacedTimes(4);
       _custom = false;
       _startDate = DateTime.now();
       _endDate = null;

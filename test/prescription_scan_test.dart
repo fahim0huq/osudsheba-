@@ -40,7 +40,8 @@ Advice: drink plenty of water
       expect(m.form, MedicineForm.tablet);
       expect(m.strength, '500 mg');
       expect(m.dose, '1 Tablet');
-      expect(m.times, ['08:00 AM', '08:00 PM']);
+      expect(m.slots, ['morning_after', 'night_after']);
+      expect(m.times, ['08:30 AM', '09:30 PM']);
       expect(m.mealRelation, 'After Meal');
       expect(m.endDate!.difference(m.startDate!).inDays + 1, 7);
       expect(only(text, 'Napa').generic, 'Paracetamol');
@@ -51,12 +52,13 @@ Advice: drink plenty of water
       final m = only(text, 'Seclo').medicine;
       expect(m.form, MedicineForm.capsule);
       expect(m.mealRelation, 'Before Meal');
+      expect(m.slots, ['morning_before', 'night_before']);
       expect(m.endDate!.difference(m.startDate!).inDays + 1, 30);
     });
 
     test('Amdocal: night only, continuing has no end date', () {
       final d = only(text, 'Amdocal');
-      expect(d.medicine.times, ['08:00 PM']);
+      expect(d.medicine.slots, ['night_after']);
       expect(d.medicine.endDate, isNull);
       expect(d.issues, isNot(contains(ScanIssue.durationMissing)));
     });
@@ -66,14 +68,14 @@ Advice: drink plenty of water
       expect(m.form, MedicineForm.syrup);
       expect(m.strength, '30 mg/5 ml');
       expect(m.dose, '10ml');
-      expect(m.times, ['08:00 AM', '08:00 PM']);
+      expect(m.slots, ['morning_after', 'night_after']);
     });
   });
 
   test('dose on the next line, written in Bangla', () {
     final m = only('Tab. Comet 500mg\n১+০+১ খাবারের পরে ১৫ দিন', 'Comet').medicine;
     expect(m.strength, '500 mg');
-    expect(m.times, ['08:00 AM', '08:00 PM']);
+    expect(m.slots, ['morning_after', 'night_after']);
     expect(m.mealRelation, 'After Meal');
     expect(m.endDate!.difference(m.startDate!).inDays + 1, 15);
   });
@@ -86,7 +88,7 @@ Advice: drink plenty of water
   });
 
   test('digits read instead of letters are fixed', () {
-    expect(only('Cap. Maxpr0 20 mg 1-0-1', 'Maxpro').medicine.times, ['08:00 AM', '08:00 PM']);
+    expect(only('Cap. Maxpr0 20 mg 1-0-1', 'Maxpro').medicine.slots, ['morning_after', 'night_after']);
   });
 
   test('a generic name is kept as written', () {
@@ -97,19 +99,19 @@ Advice: drink plenty of water
   test('half tablet at noon', () {
     final m = only('Tab. Ecosprin 75 mg 0+½+0', 'Ecosprin').medicine;
     expect(m.dose, '½ Tablet');
-    expect(m.times, ['02:00 PM']);
+    expect(m.slots, ['noon_after']);
   });
 
   test('eye drops: form from the prefix, number of drops', () {
     final m = only('Eye drop Hypersol 5%  2 drops TDS', 'Hypersol').medicine;
     expect(m.form, MedicineForm.drops);
     expect(m.dose, '2 Drops');
-    expect(m.times, ['08:00 AM', '02:00 PM', '08:00 PM']);
+    expect(m.slots, ['morning_after', 'noon_after', 'night_after']);
   });
 
   test('no times written: default time, flagged', () {
     final d = only('Tab. Monas 10 mg', 'Monas');
-    expect(d.medicine.times, ['08:00 AM']);
+    expect(d.medicine.slots, ['morning_after']);
     expect(d.issues, contains(ScanIssue.timesMissing));
   });
 
@@ -196,6 +198,48 @@ Store below 30°C. Keep out of reach of children.
     });
     test('one letter suggests nothing', () {
       expect(catalog.search('n'), isEmpty);
+    });
+  });
+
+  group('meal-time slots', () {
+    List<String> slotsOf(String line, {Map<String, String> slotTimes = const {}}) =>
+        parsePrescription(line, catalog, now: now, slotTimes: slotTimes).single.medicine.slots;
+
+    test('1+0+1 is morning and night, after meal when not written', () {
+      expect(slotsOf('Tab. Napa 500 mg 1+0+1'), ['morning_after', 'night_after']);
+    });
+    test('1+1+1 is all three, 0+0+1 is night', () {
+      expect(slotsOf('Tab. Napa 500 mg 1+1+1'), ['morning_after', 'noon_after', 'night_after']);
+      expect(slotsOf('Tab. Napa 500 mg 0+0+1'), ['night_after']);
+    });
+    test('Bangla digits and Bangla before meal pick the before row', () {
+      expect(slotsOf('Tab. Napa 500 mg ১+০+১ খাবারের আগে'), ['morning_before', 'night_before']);
+    });
+    test('BD and "at night" map to slots too', () {
+      expect(slotsOf('Tab. Napa 500 mg BD after meal'), ['morning_after', 'night_after']);
+      expect(slotsOf('Tab. Rosuva 10 mg once daily at night'), ['night_after']);
+    });
+    test('slot times come from the person\'s settings', () {
+      final m = parsePrescription(
+        'Tab. Napa 500 mg 1+0+1',
+        catalog,
+        now: now,
+        slotTimes: const {'morning_after': '09:00 AM'},
+      ).single.medicine;
+      expect(m.times, ['09:00 AM', '09:30 PM']);
+      expect(m.mealRelation, 'After Meal');
+    });
+    test('every 6 hours stays custom times, no slots', () {
+      final m = parsePrescription('Tab. Napa 500 mg q6h', catalog, now: now).single.medicine;
+      expect(m.slots, isEmpty);
+      expect(m.times, ['12:00 AM', '06:00 AM', '12:00 PM', '06:00 PM']);
+      expect(m.mealRelation, 'None');
+    });
+    test('four times a day and written clock times stay custom', () {
+      expect(slotsOf('Tab. Napa 500 mg 1+1+1+1'), isEmpty);
+      final m = parsePrescription('Tab. Napa 500 mg at 10 pm', catalog, now: now).single.medicine;
+      expect(m.slots, isEmpty);
+      expect(m.times, ['10:00 PM']);
     });
   });
 }

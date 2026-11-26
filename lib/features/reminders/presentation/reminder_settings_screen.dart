@@ -5,6 +5,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../shared/widgets/confirm_dialog.dart';
+import 'widgets/meal_times_card.dart';
 import 'widgets/refill_days_card.dart';
 import 'widgets/reminder_style_card.dart';
 
@@ -149,6 +150,8 @@ class _ReminderSettingsScreenState extends ConsumerState<ReminderSettingsScreen>
             ),
             const SizedBox(height: 12.0),
             if (remindersOn) ...[
+              const MealTimesCard(),
+              const SizedBox(height: 12.0),
               const ReminderStyleCard(),
               const SizedBox(height: 12.0),
               const RefillDaysCard(),

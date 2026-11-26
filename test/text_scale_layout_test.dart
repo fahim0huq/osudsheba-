@@ -172,6 +172,10 @@ void main() {
     );
   });
 
+  testWidgets('Medicines tab fits at text scale 2.0 in Bangla', (tester) async {
+    await _expectNoLayoutErrors(tester, 'Medicines', const MainNavigationScreen(initialTab: 3));
+  });
+
   testWidgets('Family tab fits at text scale 2.0 in Bangla', (tester) async {
     await _expectNoLayoutErrors(tester, 'Family', const MainNavigationScreen(initialTab: 4));
   });

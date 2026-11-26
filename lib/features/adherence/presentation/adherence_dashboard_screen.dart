@@ -41,7 +41,7 @@ class AdherenceDashboardScreen extends ConsumerWidget {
               : 'You haven\'t logged any doses yet. Start marking doses to track your progress!',
           icon: Icons.analytics_outlined,
           primaryActionLabel: lang == 'bn' ? 'ওষুধের তালিকায় যান' : 'Go to Medicines',
-          onPrimaryAction: () => context.go('/medicines'),
+          onPrimaryAction: () => context.go('/my-medicines'),
         ),
       );
     }

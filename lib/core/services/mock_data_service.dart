@@ -4,6 +4,7 @@ import 'local_storage_service.dart';
 import 'auth_service.dart';
 import '../utils/schedule_utils.dart';
 import '../utils/time_utils.dart';
+import '../utils/dose_slots.dart';
 
 // Local storage provider
 final localStorageProvider = Provider<LocalStorageService>((ref) {
@@ -49,6 +50,13 @@ class AppSettingsNotifier extends StateNotifier<AppSettings> {
 
   void setTextScale(double scale) {
     state = state.copyWith(textScale: scale.clamp(1.0, 1.5).toDouble());
+    _storage.saveSettings(state);
+  }
+
+  /// Changes one meal-time slot's clock time ("morning_after" -> "09:00 AM"). Medicines in
+  /// that slot follow (see MedicinesNotifier.applySlotTimes, called from app.dart).
+  void setSlotTime(String slotKey, String time) {
+    state = state.copyWith(slotTimes: {...state.slotTimes, slotKey: time});
     _storage.saveSettings(state);
   }
 
@@ -378,6 +386,27 @@ class MedicinesNotifier extends StateNotifier<List<Medicine>> {
       }
     }
     state = updatedList;
+  }
+
+  /// Re-works the times of every medicine that uses meal-time slots, after a slot's clock
+  /// time changed in Reminder settings. Returns how many medicines moved.
+  int applySlotTimes(Map<String, String> slotTimes) {
+    var moved = 0;
+    final updated = <Medicine>[];
+    for (final med in state) {
+      final slots = slotsFromKeys(med.slots);
+      final times = slots.isEmpty ? med.times : timesForSlots(slots, slotTimes);
+      if (slots.isNotEmpty && times.join('|') != med.times.join('|')) {
+        final moving = med.copyWith(times: times);
+        _storage.saveMedicine(moving, uid);
+        updated.add(moving);
+        moved++;
+      } else {
+        updated.add(med);
+      }
+    }
+    if (moved > 0) state = updated;
+    return moved;
   }
 
   void deleteMedicine(String id) {

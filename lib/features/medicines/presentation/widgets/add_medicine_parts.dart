@@ -10,11 +10,14 @@ import '../../../../shared/widgets/tap_area.dart';
 
 /// A white rounded card with a small heading.
 class FormCard extends StatelessWidget {
-  const FormCard({super.key, required this.title, required this.icon, required this.child});
+  const FormCard({super.key, required this.title, required this.icon, required this.child, this.trailing});
 
   final String title;
   final IconData icon;
   final Widget child;
+
+  /// Optional small action at the end of the heading (e.g. a settings icon).
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -38,6 +41,7 @@ class FormCard extends StatelessWidget {
                   style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
                 ),
               ),
+              ?trailing,
             ],
           ),
           const SizedBox(height: 8),

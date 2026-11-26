@@ -8,7 +8,8 @@ import '../../../core/models/mock_models.dart';
 import '../../../core/services/mock_data_service.dart';
 import '../../../core/services/prescription_service.dart';
 import '../../../core/services/scan/prescription_text_parser.dart';
-import 'widgets/dose_pattern_chips.dart';
+import '../../../core/utils/dose_slots.dart';
+import '../../medicines/presentation/widgets/when_to_take_card.dart';
 import 'widgets/medicine_name_picker.dart';
 
 /// For handwritten prescriptions: the photo stays on screen (pinch to zoom) while the
@@ -27,11 +28,9 @@ class _PhotoEntryScreenState extends ConsumerState<PhotoEntryScreen> {
   final _name = TextEditingController();
   final List<ScanDraft> _added = [];
   NamePick? _pick;
-  List<String> _times = const [];
-  String _meal = 'After Meal';
+  Set<DoseSlot> _slots = {}; // Morning / Noon / Night x Before / After meal, like "1+0+1"
   int? _days; // null = keeps going
 
-  static const _meals = {'Before Meal': 'খাবারের আগে', 'After Meal': 'খাবারের পরে', 'None': 'যে কোনো সময়'};
   static const _dayOptions = [null, 3, 5, 7, 10, 14, 30];
 
   @override
@@ -56,10 +55,11 @@ class _PhotoEntryScreenState extends ConsumerState<PhotoEntryScreen> {
       _snack(bn ? 'ওষুধের নাম লিখুন' : 'Type the medicine name', error: true);
       return;
     }
-    if (_times.isEmpty) {
+    if (_slots.isEmpty) {
       _snack(bn ? 'কখন খাবেন বেছে নিন (যেমন ১+০+১)' : 'Choose when to take it (e.g. 1+0+1)', error: true);
       return;
     }
+    final slots = DoseSlot.values.where(_slots.contains).toList();
     final now = DateTime.now();
     final start = DateTime(now.year, now.month, now.day);
     final med = Medicine(
@@ -68,8 +68,9 @@ class _PhotoEntryScreenState extends ConsumerState<PhotoEntryScreen> {
       strength: pick.strength,
       form: pick.form,
       dose: pick.form.defaultDose,
-      times: _times,
-      mealRelation: _meal,
+      times: timesForSlots(slots, ref.read(appSettingsProvider).slotTimes),
+      mealRelation: mealRelationForSlots(slots),
+      slots: [for (final s in slots) s.key],
       instruction: '',
       startDate: start,
       endDate: _days == null ? null : start.add(Duration(days: _days! - 1)),
@@ -79,7 +80,7 @@ class _PhotoEntryScreenState extends ConsumerState<PhotoEntryScreen> {
     setState(() {
       _added.add(ScanDraft(medicine: med, sourceText: '', generic: pick.entry?.generic));
       _pick = null;
-      _times = const [];
+      _slots = {};
       _name.clear();
     });
     _snack(bn ? '${med.name} যোগ হয়েছে' : 'Added ${med.name}');
@@ -155,13 +156,13 @@ class _PhotoEntryScreenState extends ConsumerState<PhotoEntryScreen> {
                 onPick: (p) => setState(() => _pick = p),
               ),
               if (!typing) ...[
-                DosePatternChips(times: _times, bn: bn, onSelected: (t) => setState(() => _times = t)),
-                _chips<String>(
-                  _meals.keys.toList(),
-                  _meal,
-                  (m) => bn ? _meals[m]! : (m == 'None' ? 'Any time' : m),
-                  (m) => _meal = m,
+                SlotGrid(
+                  selected: _slots,
+                  slotTimes: ref.watch(appSettingsProvider.select((s) => s.slotTimes)),
+                  onChanged: (v) => setState(() => _slots = v),
+                  lang: bn ? 'bn' : 'en',
                 ),
+                const SizedBox(height: 4),
                 _chips<int?>(
                   _dayOptions,
                   _days,

@@ -6,7 +6,7 @@ import '../../../core/services/mock_data_service.dart';
 import 'home_screen.dart';
 import '../../medicines/presentation/add_medicine_screen.dart';
 import '../../prescription/presentation/upload_prescription_screen.dart';
-import '../../adherence/presentation/adherence_dashboard_screen.dart';
+import '../../medicines/presentation/manage_medicines_screen.dart';
 import '../../caregiver/presentation/caregiver_dashboard_screen.dart';
 
 class MainNavigationScreen extends ConsumerStatefulWidget {
@@ -47,7 +47,7 @@ class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
               HomeScreen(),
               AddMedicineScreen(),
               UploadPrescriptionScreen(),
-              AdherenceDashboardScreen(),
+              ManageMedicinesScreen(),
               CaregiverDashboardScreen(),
             ],
           ),
@@ -73,14 +73,14 @@ class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
         'label': lang == 'bn' ? 'স্ক্যান' : 'Scan',
       },
       {
-        'icon': Icons.analytics_outlined,
-        'selectedIcon': Icons.analytics_rounded,
-        'label': lang == 'bn' ? 'রিপোর্ট' : 'Report',
+        'icon': Icons.medication_outlined,
+        'selectedIcon': Icons.medication_rounded,
+        'label': lang == 'bn' ? 'ওষুধ' : 'Medicines',
       },
       {
         'icon': Icons.people_outline_rounded,
         'selectedIcon': Icons.people_rounded,
-        'label': lang == 'bn' ? 'তত্ত্বাবধায়ক' : 'Family',
+        'label': lang == 'bn' ? 'পরিবার' : 'Family',
       },
     ];
 

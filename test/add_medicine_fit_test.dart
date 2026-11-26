@@ -86,19 +86,16 @@ Future<double> _scrollExtent(WidgetTester tester, _Phone phone, String lang, dou
     await tester.pump(const Duration(milliseconds: 300));
   }
   if (custom) {
-    // "3 times", then "Custom" (it opens the time picker: cancel it), as a user would.
+    // "Custom", then "6× a day" (every 4 hours), as a user would.
     final add = find.byType(AddMedicineScreen);
-    await tester.tap(find.descendant(of: add, matching: find.text('3 times')));
-    await tester.pump(const Duration(milliseconds: 500));
     await tester.tap(find.descendant(of: add, matching: find.text('Custom')));
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.tap(find.descendant(of: add, matching: find.text('6× a day')));
     for (var i = 0; i < 4; i++) {
       await tester.pump(const Duration(milliseconds: 300));
     }
-    await tester.tap(find.text('Cancel'));
-    for (var i = 0; i < 4; i++) {
-      await tester.pump(const Duration(milliseconds: 300));
-    }
-    expect(find.descendant(of: add, matching: find.textContaining(RegExp(r'^\d{1,2}:\d{2} [AP]M$'))), findsNWidgets(3));
+    // Six times show as one summary line (with Change), so the form still fits.
+    expect(find.descendant(of: add, matching: find.text('Change')), findsOneWidget);
   }
   final scrollable = tester.state<ScrollableState>(
     find.descendant(of: find.byType(family ? CaregiverDashboardScreen : (edit ? EditMedicineScreen : AddMedicineScreen)), matching: find.byType(Scrollable)).first,
@@ -140,7 +137,7 @@ void main() {
     });
   }
 
-  testWidgets('Add Medicine fits on ${_phones.first.name} with 3 times, then Custom', (tester) async {
+  testWidgets('Add Medicine fits on ${_phones.first.name} with Custom, 6 times a day', (tester) async {
     final extent = await _scrollExtent(tester, _phones.first, 'en', 1.1, custom: true);
     expect(extent, 0.0, reason: 'form needs ${extent.toStringAsFixed(0)}px of scrolling');
   });

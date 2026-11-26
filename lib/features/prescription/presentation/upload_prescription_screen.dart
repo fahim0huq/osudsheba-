@@ -47,10 +47,11 @@ class _UploadPrescriptionScreenState extends ConsumerState<UploadPrescriptionScr
 
   Future<void> _read(bool bn) async {
     setState(() => _busy = true);
+    final slotTimes = ref.read(appSettingsProvider).slotTimes;
     try {
       final result = _packets
-          ? await _service.analyzePackets([for (final f in _photos) f.path])
-          : await _service.analyzePrescription(_photos.first.path);
+          ? await _service.analyzePackets([for (final f in _photos) f.path], slotTimes: slotTimes)
+          : await _service.analyzePrescription(_photos.first.path, slotTimes: slotTimes);
       if (!mounted) return;
       context.push(
         '/ai-prescription-review',
